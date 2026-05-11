@@ -28,6 +28,7 @@ from video_sum_core.errors import (
 from video_sum_core.models.tasks import InputType, MindMapNode, TaskMindMap, TaskResult
 from video_sum_core.pipeline.base import PipelineContext, PipelineEvent, PipelineEventReporter, PipelineRunner
 from video_sum_core.utils import ensure_directory, normalize_video_url, sanitize_filename
+from video_sum_infra.llm import normalize_openai_compatible_model_name
 from video_sum_infra.runtime import (
     ffmpeg_location,
     runtime_library_dirs,
@@ -1467,6 +1468,8 @@ class RealPipelineRunner(PipelineRunner):
         timeout: float = 180,
         retry_count: int | None = None,
     ) -> dict[str, object]:
+        payload = dict(payload)
+        payload["model"] = normalize_openai_compatible_model_name(str(payload.get("model") or ""))
         headers = {
             "Authorization": f"Bearer {self._settings.llm_api_key}",
             "Content-Type": "application/json",
@@ -1544,6 +1547,9 @@ class RealPipelineRunner(PipelineRunner):
             ],
             "temperature": 0,
             "max_tokens": 32,
+            "response_format": {"type": "json_object"},
+            "enable_thinking": False,
+            "chat_template_kwargs": {"enable_thinking": False},
         }
         try:
             self._request_llm_json(base_url=base_url, payload=payload, timeout=20, retry_count=0)

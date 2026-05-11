@@ -10,6 +10,7 @@ import httpx
 from fastapi import HTTPException
 
 from video_sum_infra.config import ServiceSettings
+from video_sum_infra.llm import normalize_openai_compatible_model_name
 from video_sum_service.integrations import extract_http_error_detail, extract_llm_message_content
 
 logger = logging.getLogger(__name__)
@@ -65,12 +66,13 @@ def chat_knowledge_llm(
     require_json: bool = False,
 ) -> tuple[str, dict[str, object] | None]:
     base_url, model, api_key = ensure_knowledge_llm_settings(settings)
+    request_model = normalize_openai_compatible_model_name(model)
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
     payload: dict[str, object] = {
-        "model": model,
+        "model": request_model,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -195,12 +197,13 @@ def stream_knowledge_llm(
     should_cancel: Callable[[], bool] | None = None,
 ) -> Iterator[KnowledgeLlmStreamEvent]:
     base_url, model, api_key = ensure_knowledge_llm_settings(settings)
+    request_model = normalize_openai_compatible_model_name(model)
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
     payload: dict[str, object] = {
-        "model": model,
+        "model": request_model,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},

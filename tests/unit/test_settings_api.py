@@ -590,6 +590,54 @@ def test_llm_connection_uses_unsaved_payload(monkeypatch, tmp_path: Path) -> Non
     assert calls[0]["json"]["model"] == "new-model"
 
 
+def test_llm_connection_normalizes_mimo_model_and_requests_json_mode(monkeypatch, tmp_path: Path) -> None:
+    current = ServiceSettings(
+        data_dir=tmp_path / "data",
+        cache_dir=tmp_path / "cache",
+        tasks_dir=tmp_path / "tasks",
+        runtime_channel="base",
+        llm_enabled=True,
+        llm_base_url="https://api.example.com/v1",
+        llm_api_key="test-key",
+        llm_model="MiMo-V2.5-Pro",
+    )
+    settings_manager._settings = current
+
+    calls: list[dict[str, object]] = []
+
+    class FakeResponse:
+        status_code = 200
+        text = '{"choices":[{"message":{"content":"{\\"ok\\":true,\\"message\\":\\"test\\"}"}}]}'
+
+        def json(self) -> dict[str, object]:
+            return {"choices": [{"message": {"content": '{"ok":true,"message":"test"}'}}]}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def __enter__(self) -> "FakeClient":
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        def post(self, url: str, headers: dict[str, str], json: dict[str, object]) -> FakeResponse:
+            calls.append({"url": url, "headers": headers, "json": json})
+            return FakeResponse()
+
+    monkeypatch.setattr(service_app.httpx, "Client", FakeClient)
+
+    response = probe_llm_connection()
+
+    assert response["ok"] is True
+    assert response["model"] == "MiMo-V2.5-Pro"
+    assert calls[0]["json"]["model"] == "mimo-v2.5-pro"
+    assert calls[0]["json"]["response_format"] == {"type": "json_object"}
+    assert calls[0]["json"]["enable_thinking"] is False
+    assert calls[0]["json"]["chat_template_kwargs"] == {"enable_thinking": False}
+
+
 def test_llm_connection_requires_base_url(tmp_path: Path) -> None:
     current = ServiceSettings(
         data_dir=tmp_path / "data",

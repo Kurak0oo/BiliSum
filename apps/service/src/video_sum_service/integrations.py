@@ -6,6 +6,7 @@ import httpx
 from fastapi import HTTPException
 
 from video_sum_infra.config import ServiceSettings
+from video_sum_infra.llm import normalize_openai_compatible_model_name
 from video_sum_infra.runtime import service_log_path
 
 from video_sum_service.context import COVER_CACHE_DIR, settings_manager
@@ -127,6 +128,7 @@ def probe_llm_connection(payload: SettingsUpdatePayload | None = None) -> dict[s
     base_url = str(effective_settings.llm_base_url or "").strip().rstrip("/")
     api_key = str(effective_settings.llm_api_key or "").strip()
     model = str(effective_settings.llm_model or "").strip()
+    request_model = normalize_openai_compatible_model_name(model)
 
     if not base_url:
         raise HTTPException(status_code=400, detail="请先填写 API Base URL。")
@@ -140,7 +142,7 @@ def probe_llm_connection(payload: SettingsUpdatePayload | None = None) -> dict[s
         "Content-Type": "application/json",
     }
     request_payload = {
-        "model": model,
+        "model": request_model,
         "messages": [
             {
                 "role": "system",
@@ -156,6 +158,9 @@ def probe_llm_connection(payload: SettingsUpdatePayload | None = None) -> dict[s
         ],
         "temperature": 0,
         "max_tokens": 64,
+        "response_format": {"type": "json_object"},
+        "enable_thinking": False,
+        "chat_template_kwargs": {"enable_thinking": False},
     }
 
     try:
