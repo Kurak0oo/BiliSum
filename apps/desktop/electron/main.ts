@@ -18,6 +18,7 @@ import {
 } from "electron";
 import { autoUpdater, ProgressInfo, UpdateInfo as ElectronUpdateInfo } from "electron-updater";
 import desktopPackage from "../package.json";
+import { isAllowedExternalUrl, isCrossOriginNavigation } from "./externalLinks";
 
 type CloseBehavior = "ask" | "tray" | "exit";
 
@@ -1326,8 +1327,9 @@ function createWindow() {
 
   // 禁用鼠标中键导航（防止打开新窗口），但允许外部链接通过 shell.openExternal 打开
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    // 尝试使用 shell.openExternal 打开外部 URL
-    shell.openExternal(url);
+    if (isAllowedExternalUrl(url)) {
+      void shell.openExternal(url).catch(() => undefined);
+    }
     // 阻止在 Electron 中创建新窗口
     return { action: "deny" };
   });
@@ -1337,13 +1339,12 @@ function createWindow() {
     if (!mainWindow) {
       return;
     }
-    const parsedUrl = new URL(url);
-    const currentUrl = new URL(mainWindow.webContents.getURL());
-    
     // 如果是跨域导航（外链），在系统浏览器中打开
-    if (parsedUrl.origin !== currentUrl.origin) {
+    if (isCrossOriginNavigation(url, mainWindow.webContents.getURL())) {
       event.preventDefault();
-      shell.openExternal(url);
+      if (isAllowedExternalUrl(url)) {
+        void shell.openExternal(url).catch(() => undefined);
+      }
     }
     // 同域导航允许正常进行
   });
