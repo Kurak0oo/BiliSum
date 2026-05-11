@@ -8,7 +8,11 @@ from fastapi import HTTPException
 import video_sum_service.app as service_app
 import video_sum_service.runtime_support as runtime_support
 from video_sum_core.models.tasks import InputType, TaskInput, TaskStatus
-from video_sum_infra.config import ServiceSettings
+from video_sum_infra.config import (
+    DEFAULT_KNOWLEDGE_NOTE_SYSTEM_PROMPT,
+    DEFAULT_KNOWLEDGE_NOTE_USER_PROMPT_TEMPLATE,
+    ServiceSettings,
+)
 from video_sum_service.app import (
     app,
     install_knowledge_dependencies,
@@ -84,6 +88,8 @@ def test_serialize_settings_includes_persisted_file_flag(monkeypatch, tmp_path: 
     assert payload["mindmap_concurrency"] == current.mindmap_concurrency
     assert payload["knowledge_note_system_prompt"] == current.knowledge_note_system_prompt
     assert payload["knowledge_note_user_prompt_template"] == current.knowledge_note_user_prompt_template
+    assert payload["defaults"]["knowledge_note_system_prompt"] == DEFAULT_KNOWLEDGE_NOTE_SYSTEM_PROMPT
+    assert payload["defaults"]["knowledge_note_user_prompt_template"] == DEFAULT_KNOWLEDGE_NOTE_USER_PROMPT_TEMPLATE
 
     settings_manager._settings_path.parent.mkdir(parents=True, exist_ok=True)
     settings_manager._settings_path.write_text("{}", encoding="utf-8")

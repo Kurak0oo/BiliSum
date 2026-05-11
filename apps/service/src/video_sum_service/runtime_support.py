@@ -10,8 +10,12 @@ from pathlib import Path
 
 from fastapi import HTTPException
 
+from video_sum_infra.config import (
+    DEFAULT_KNOWLEDGE_NOTE_SYSTEM_PROMPT,
+    DEFAULT_KNOWLEDGE_NOTE_USER_PROMPT_TEMPLATE,
+    ServiceSettings,
+)
 from video_sum_core.pipeline.real import PipelineSettings, RealPipelineRunner
-from video_sum_infra.config import ServiceSettings
 from video_sum_infra.runtime import (
     activate_runtime_pythonpath,
     bootstrap_managed_runtime,
@@ -850,6 +854,10 @@ def serialize_settings(
         "ytdlp_cookies_file": current_settings.ytdlp_cookies_file,
         "ytdlp_cookies_browser": current_settings.ytdlp_cookies_browser,
         "settings_file_exists": settings_manager.has_persisted_settings,
+        "defaults": {
+            "knowledge_note_system_prompt": DEFAULT_KNOWLEDGE_NOTE_SYSTEM_PROMPT,
+            "knowledge_note_user_prompt_template": DEFAULT_KNOWLEDGE_NOTE_USER_PROMPT_TEMPLATE,
+        },
     }
 
 

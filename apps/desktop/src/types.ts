@@ -279,6 +279,10 @@ export type ServiceSettings = {
   ytdlp_cookies_file: string;
   ytdlp_cookies_browser: string;
   settings_file_exists?: boolean;
+  defaults?: {
+    knowledge_note_system_prompt?: string;
+    knowledge_note_user_prompt_template?: string;
+  };
 };
 
 export type SystemInfo = {
