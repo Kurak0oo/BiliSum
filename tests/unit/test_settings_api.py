@@ -99,6 +99,26 @@ def test_serialize_settings_includes_persisted_file_flag(monkeypatch, tmp_path: 
     assert payload["settings_file_exists"] is True
 
 
+def test_serialize_settings_masks_provider_api_keys(tmp_path: Path) -> None:
+    current = ServiceSettings(
+        data_dir=tmp_path / "data",
+        cache_dir=tmp_path / "cache",
+        tasks_dir=tmp_path / "tasks",
+        siliconflow_asr_api_key="asr-secret",
+        llm_api_key="llm-secret",
+        knowledge_llm_api_key="knowledge-secret",
+    )
+
+    payload = serialize_settings(current, environment_info={"cudaAvailable": False, "runtimeChannel": "base"})
+
+    assert payload["siliconflow_asr_api_key"] == ""
+    assert payload["llm_api_key"] == ""
+    assert payload["knowledge_llm_api_key"] == ""
+    assert payload["siliconflow_asr_api_key_configured"] is True
+    assert payload["llm_api_key_configured"] is True
+    assert payload["knowledge_llm_api_key_configured"] is True
+
+
 def test_install_local_asr_refreshes_environment(monkeypatch, tmp_path: Path) -> None:
     current = ServiceSettings(
         data_dir=tmp_path / "data",

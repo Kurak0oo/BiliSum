@@ -1,4 +1,5 @@
 import type {
+  AuthStatus,
   EnvironmentInfo,
   RuntimeStatus,
   KnowledgeAskResponse,
@@ -42,6 +43,13 @@ export type AppUpdateInfo = {
   errorMessage: string | null;
 };
 
+export class AuthRequiredError extends Error {
+  constructor(message = "需要输入 BiliSum 访问密钥。") {
+    super(message);
+    this.name = "AuthRequiredError";
+  }
+}
+
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, options);
   if (!response.ok) {
@@ -53,9 +61,16 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
     } catch {
       detail = text || `Request failed: ${response.status}`;
     }
+    if (response.status === 401) {
+      throw new AuthRequiredError(detail);
+    }
     throw new Error(detail);
   }
   return response.json() as Promise<T>;
+}
+
+async function fetchJsonWithAuth<T>(url: string, options?: RequestInit): Promise<T> {
+  return fetchJson<T>(url, options);
 }
 
 function parseSseBlock(block: string): { event: string; data: string } | null {
@@ -82,6 +97,15 @@ function parseSseBlock(block: string): { event: string; data: string } | null {
 }
 
 export const api = {
+  getAuthStatus() {
+    return fetchJson<AuthStatus>("/api/v1/auth/status");
+  },
+  createAuthSession(token: string) {
+    return fetchJson<AuthStatus>("/api/v1/auth/session", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  },
   getHealth() {
     return fetchJson<{ status: string }>("/health");
   },
@@ -93,7 +117,7 @@ export const api = {
     if (options?.refresh) {
       url.searchParams.set("refresh", "1");
     }
-    return fetchJson<SystemInfo>(url.toString());
+    return fetchJsonWithAuth<SystemInfo>(url.toString());
   },
   getEnvironment(options?: { runtimeChannel?: string; refresh?: boolean }) {
     const url = new URL("/api/v1/environment", window.location.origin);
@@ -103,13 +127,13 @@ export const api = {
     if (options?.refresh) {
       url.searchParams.set("refresh", "1");
     }
-    return fetchJson<EnvironmentInfo>(url.toString());
+    return fetchJsonWithAuth<EnvironmentInfo>(url.toString());
   },
   getRuntimeStatus() {
-    return fetchJson<RuntimeStatus>("/api/v1/runtime/status");
+    return fetchJsonWithAuth<RuntimeStatus>("/api/v1/runtime/status");
   },
   syncRuntime(payload?: { runtime_channel?: string }) {
-    return fetchJson<{
+    return fetchJsonWithAuth<{
       synced: boolean;
       runtimeChannel?: string;
       channels?: Array<{ runtimeChannel: string; synced: boolean }>;
@@ -122,10 +146,10 @@ export const api = {
     });
   },
   getSettings() {
-    return fetchJson<ServiceSettings>("/api/v1/settings");
+    return fetchJsonWithAuth<ServiceSettings>("/api/v1/settings");
   },
   getAppUpdate() {
-    return fetchJson<AppUpdateInfo>("/api/v1/app/update");
+    return fetchJsonWithAuth<AppUpdateInfo>("/api/v1/app/update");
   },
   updateSettings(payload: Partial<ServiceSettings>) {
     return fetchJson<UpdateSettingsResponse>("/api/v1/settings", {

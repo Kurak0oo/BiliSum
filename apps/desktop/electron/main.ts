@@ -1,4 +1,5 @@
 import { ChildProcess, spawn, SpawnOptions } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import { createServer, IncomingMessage, Server, ServerResponse } from "node:http";
 import path from "node:path";
@@ -133,6 +134,7 @@ const iconPath = isDev
   ? path.resolve(repoRoot, "apps/desktop/build/icon.ico")
   : path.join(process.resourcesPath, "icon.ico");
 const preferencesPath = path.join(app.getPath("userData"), "desktop-preferences.json");
+const accessTokenPath = path.join(app.getPath("userData"), "access-token.json");
 const legacyUserDataPath = path.join(app.getPath("appData"), LEGACY_PRODUCT_NAME);
 const legacyPreferencesPath = path.join(legacyUserDataPath, "desktop-preferences.json");
 const preferencesFileExistedAtLaunch = fs.existsSync(preferencesPath) || fs.existsSync(legacyPreferencesPath);
@@ -156,6 +158,7 @@ let backendStatus: BackendStatus = {
   url: backendUrl,
   lastError: "",
 };
+let desktopAccessToken = "";
 
 // 更新管理器状态
 let updateStatus: UpdateInfo = {
@@ -222,6 +225,50 @@ function migrateLegacyDesktopFiles() {
 
 function getServiceLogPath() {
   return path.join(currentLocalDataRoot(), "logs", "service.log");
+}
+
+function loadOrCreateDesktopAccessToken() {
+  const envToken = String(process.env.VIDEO_SUM_ACCESS_TOKEN || "").trim();
+  if (envToken) {
+    return envToken;
+  }
+  try {
+    if (fs.existsSync(accessTokenPath)) {
+      const payload = JSON.parse(fs.readFileSync(accessTokenPath, "utf-8")) as { accessToken?: string; access_token?: string };
+      const existing = String(payload.accessToken || payload.access_token || "").trim();
+      if (existing) {
+        return existing;
+      }
+    }
+  } catch (error) {
+    console.warn("[Auth] Failed to read desktop access token:", error);
+  }
+
+  const token = crypto.randomBytes(32).toString("base64url");
+  try {
+    fs.mkdirSync(path.dirname(accessTokenPath), { recursive: true });
+    fs.writeFileSync(
+      accessTokenPath,
+      JSON.stringify({ accessToken: token, createdAt: new Date().toISOString() }, null, 2),
+      "utf-8",
+    );
+  } catch (error) {
+    console.warn("[Auth] Failed to persist desktop access token:", error);
+  }
+  return token;
+}
+
+function getDesktopAccessToken() {
+  if (!desktopAccessToken) {
+    desktopAccessToken = loadOrCreateDesktopAccessToken();
+  }
+  return desktopAccessToken;
+}
+
+function withBackendAuthHeaders(headers?: HeadersInit): Headers {
+  const nextHeaders = new Headers(headers);
+  nextHeaders.set("Authorization", `Bearer ${getDesktopAccessToken()}`);
+  return nextHeaders;
 }
 
 function getLogDirPath() {
@@ -423,7 +470,9 @@ async function getTrustedStorageLocations() {
   const fallbackCacheDir = path.join(fallbackDataDir, "cache");
   const fallbackTasksDir = path.join(fallbackDataDir, "tasks");
   try {
-    const response = await fetch(`${backendUrl}/api/v1/settings`);
+    const response = await fetch(`${backendUrl}/api/v1/settings`, {
+      headers: withBackendAuthHeaders(),
+    });
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
@@ -1419,6 +1468,7 @@ function buildProxyHeaders(request: IncomingMessage): Headers {
     }
     headers.set(key, Array.isArray(value) ? value.join(", ") : value);
   }
+  headers.set("Authorization", `Bearer ${getDesktopAccessToken()}`);
   return headers;
 }
 
@@ -1616,6 +1666,7 @@ async function startBackend(): Promise<BackendStatus> {
     cwd: target.cwd,
     isDev,
   });
+  getDesktopAccessToken();
 
   // Windows 上隐藏控制台窗口
   const spawnOptions: SpawnOptions = {
@@ -1624,6 +1675,7 @@ async function startBackend(): Promise<BackendStatus> {
       ...process.env,
       VIDEO_SUM_HOST: "127.0.0.1",
       VIDEO_SUM_PORT: "3838",
+      VIDEO_SUM_ACCESS_TOKEN: getDesktopAccessToken(),
       ...(isDev
         ? {
             PYTHONPATH: [

@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from video_sum_service.auth import is_auth_exempt_path, request_is_authorized, unauthorized_response
 from video_sum_core.models.tasks import TaskStatus
 from video_sum_infra.db import connect_sqlite
 from video_sum_infra.runtime import (
@@ -22,7 +23,7 @@ from video_sum_infra.runtime import (
     write_runtime_metadata,
 )
 
-from video_sum_service.context import CACHE_STATIC_DIR, WEB_STATIC_DIR, app_info, logger, settings_manager
+from video_sum_service.context import CACHE_STATIC_DIR, WEB_STATIC_DIR, access_token_manager, app_info, logger, settings_manager
 from video_sum_service.integrations import probe_asr_connection, probe_llm_connection
 from video_sum_service.repository import SqliteTaskRepository
 from video_sum_service.routers.system import router as system_router
@@ -138,6 +139,15 @@ app.include_router(system_router)
 app.include_router(videos_router)
 app.include_router(tasks_router)
 app.include_router(knowledge_router)
+
+
+@app.middleware("http")
+async def require_api_access_token(request, call_next):
+    path = request.url.path
+    if path.startswith("/api/v1/") and not is_auth_exempt_path(path, request.method):
+        if not request_is_authorized(request, access_token_manager):
+            return unauthorized_response()
+    return await call_next(request)
 
 
 def frontend_shell_response() -> FileResponse:

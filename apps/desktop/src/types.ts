@@ -225,6 +225,13 @@ export type RuntimeStatus = {
   channels: RuntimeChannelStatus[];
 };
 
+export type AuthStatus = {
+  required: boolean;
+  authenticated: boolean;
+  configuredFromEnv?: boolean;
+  tokenFile?: string;
+};
+
 export type ServiceSettings = {
   host: string;
   port: number;

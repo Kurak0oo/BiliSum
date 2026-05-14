@@ -14,7 +14,7 @@ import {
   type Snapshot,
   type UpdateState,
 } from "./appModel";
-import { api } from "./api";
+import { AuthRequiredError, api } from "./api";
 import { HomeIcon, KnowledgeIcon, LibraryIcon, SettingsIcon } from "./components/AppIcons";
 import { CookieHelpDialog } from "./components/CookieHelpDialog";
 import { MultiPageSelectDialog } from "./components/MultiPageSelectDialog";
@@ -65,6 +65,11 @@ export function App() {
   });
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [authenticated, setAuthenticated] = useState<boolean>(() => Boolean(window.desktop));
+  const [authToken, setAuthToken] = useState("");
+  const [authError, setAuthError] = useState("");
+  const [authSubmitting, setAuthSubmitting] = useState(false);
   const [startupAnnouncement, setStartupAnnouncement] = useState<StartupAnnouncement | null>(null);
   const [setupAssistantOpen, setSetupAssistantOpen] = useState(false);
   const [cookieHelpDialogOpen, setCookieHelpDialogOpen] = useState(false);
@@ -78,6 +83,33 @@ export function App() {
     errorMessage: null,
   });
   const localVideoInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    let disposed = false;
+    async function checkAuth() {
+      if (window.desktop) {
+        setAuthenticated(true);
+        setAuthChecked(true);
+        return;
+      }
+      try {
+        const status = await api.getAuthStatus();
+        if (!disposed) {
+          setAuthenticated(Boolean(status.authenticated));
+          setAuthChecked(true);
+        }
+      } catch {
+        if (!disposed) {
+          setAuthenticated(false);
+          setAuthChecked(true);
+        }
+      }
+    }
+    void checkAuth();
+    return () => {
+      disposed = true;
+    };
+  }, []);
 
   useEffect(() => {
     const theme = darkMode ? "dark" : "light";
@@ -128,6 +160,9 @@ export function App() {
     let disposed = false;
 
     async function refresh() {
+      if (!authenticated) {
+        return;
+      }
       try {
         const [health, settings, videos] = await Promise.all([
           api.getHealth(),
@@ -171,6 +206,11 @@ export function App() {
         }
       } catch (error) {
         if (!disposed) {
+          if (error instanceof AuthRequiredError) {
+            setAuthenticated(false);
+            setAuthError("");
+            return;
+          }
           setSnapshot((current) => ({
             ...current,
             serviceOnline: false,
@@ -187,7 +227,28 @@ export function App() {
       disposed = true;
       window.clearInterval(timer);
     };
-  }, [refreshSeed]);
+  }, [authenticated, refreshSeed]);
+
+  async function handleAuthSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const token = authToken.trim();
+    if (!token) {
+      setAuthError("请输入访问密钥。");
+      return;
+    }
+    setAuthSubmitting(true);
+    setAuthError("");
+    try {
+      const status = await api.createAuthSession(token);
+      setAuthenticated(Boolean(status.authenticated));
+      setAuthToken("");
+      setRefreshSeed((current) => current + 1);
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : "访问密钥无效。");
+    } finally {
+      setAuthSubmitting(false);
+    }
+  }
 
   function openUpdateDialog() {
     setUpdateDialogOpen(true);
@@ -610,6 +671,35 @@ export function App() {
   const canInstallUpdates = Boolean(window.desktop?.update) && !isUpdateUnsupported(updateState);
   const canImportLocalVideo = Boolean(window.desktop?.media) || typeof window !== "undefined";
 
+  if (!window.desktop && authChecked && !authenticated) {
+    return (
+      <AuthGate
+        token={authToken}
+        error={authError}
+        submitting={authSubmitting}
+        onTokenChange={setAuthToken}
+        onSubmit={handleAuthSubmit}
+      />
+    );
+  }
+
+  if (!window.desktop && !authChecked) {
+    return (
+      <div className="auth-shell">
+        <section className="auth-panel">
+          <div className="auth-brand">
+            <img src="/static/assets/icons/icon.svg" alt="" />
+            <div>
+              <span>BiliSum</span>
+              <h1>正在检查访问权限</h1>
+            </div>
+          </div>
+          <p className="auth-muted">请稍候。</p>
+        </section>
+      </div>
+    );
+  }
+
   return (
     <div className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${mobileSidebarOpen ? "mobile-sidebar-open" : ""}`}>
       <input
@@ -866,5 +956,55 @@ function IconSidebarToggle({ collapsed }: { collapsed: boolean }) {
       <path d="M9 4.5v15" />
       {collapsed ? <path d="m13.5 12 3-3m-3 3 3 3" /> : <path d="m15.5 12-3-3m3 3-3 3" />}
     </svg>
+  );
+}
+
+function AuthGate({
+  token,
+  error,
+  submitting,
+  onTokenChange,
+  onSubmit,
+}: {
+  token: string;
+  error: string;
+  submitting: boolean;
+  onTokenChange(value: string): void;
+  onSubmit(event: FormEvent<HTMLFormElement>): void;
+}) {
+  return (
+    <div className="auth-shell">
+      <section className="auth-panel">
+        <div className="auth-brand">
+          <img src="/static/assets/icons/icon.svg" alt="" />
+          <div>
+            <span>BiliSum</span>
+            <h1>输入访问密钥</h1>
+          </div>
+        </div>
+        <p className="auth-muted">
+          Web 端访问需要 BiliSum 服务密钥。桌面端会自动注入密钥；Docker 或 npx 部署可通过
+          {" "}
+          <code>VIDEO_SUM_ACCESS_TOKEN</code>
+          {" "}
+          配置。
+        </p>
+        <form className="auth-form" onSubmit={onSubmit}>
+          <label htmlFor="access-token">访问密钥</label>
+          <input
+            id="access-token"
+            type="password"
+            value={token}
+            autoComplete="current-password"
+            autoFocus
+            onChange={(event) => onTokenChange(event.target.value)}
+          />
+          {error ? <p className="auth-error">{error}</p> : null}
+          <button type="submit" disabled={submitting}>
+            {submitting ? "正在验证..." : "进入 BiliSum"}
+          </button>
+        </form>
+      </section>
+    </div>
   );
 }

@@ -3,8 +3,15 @@ import re
 import threading
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from video_sum_core.models.tasks import TaskStatus
+from video_sum_service.auth import (
+    describe_token_source,
+    extract_bearer_token,
+    request_is_authorized,
+    set_session_cookie,
+)
 from video_sum_infra.runtime import (
     activate_runtime_pythonpath,
     bootstrap_managed_runtime,
@@ -13,7 +20,7 @@ from video_sum_infra.runtime import (
     service_log_path,
 )
 
-from video_sum_service.context import app_info, logger, settings_manager
+from video_sum_service.context import access_token_manager, app_info, logger, settings_manager
 from video_sum_service.integrations import (
     extract_http_error_detail,
     probe_asr_connection,
@@ -115,6 +122,29 @@ def get_settings(request: Request) -> dict[str, object]:
     runtime_startup = get_runtime_startup_state(request.app.state)
     environment = dict(runtime_startup.get("environment") or {})
     return serialize_settings(settings_manager.current, environment_info=environment)
+
+
+@router.get("/auth/status")
+def get_auth_status(request: Request) -> dict[str, object]:
+    return {
+        **describe_token_source(access_token_manager),
+        "authenticated": request_is_authorized(request, access_token_manager),
+    }
+
+
+@router.post("/auth/session")
+def create_auth_session(request: Request) -> JSONResponse:
+    token = extract_bearer_token(request)
+    if not access_token_manager.verify(token):
+        raise HTTPException(status_code=401, detail="访问密钥无效。")
+    response = JSONResponse(
+        {
+            "authenticated": True,
+            **describe_token_source(access_token_manager),
+        }
+    )
+    set_session_cookie(response, token or "")
+    return response
 
 
 @router.get("/app/update")
