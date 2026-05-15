@@ -23,6 +23,7 @@ fi
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
 desktop_dir="$repo_root/apps/desktop"
+web_static_validation_script="$repo_root/scripts/validate_web_static_assets.js"
 
 python312="$(uv python find 3.12 | tr -d '\r')"
 if [[ -z "$python312" ]]; then
@@ -31,10 +32,6 @@ if [[ -z "$python312" ]]; then
 fi
 
 echo "Using Python 3.12: $python312"
-if ! "$python312" -m pip --version >/dev/null 2>&1; then
-  echo "pip is missing in the selected Python environment; bootstrapping with ensurepip..."
-  "$python312" -m ensurepip --upgrade
-fi
 
 icon_script="$repo_root/apps/desktop/build/generate_icon.py"
 if [[ ! -f "$icon_script" ]]; then
@@ -42,13 +39,29 @@ if [[ ! -f "$icon_script" ]]; then
   exit 1
 fi
 
-if ! "$python312" -c "from PIL import Image" >/dev/null 2>&1; then
-  echo "Pillow is missing; installing Pillow into the selected Python 3.12 environment..."
-  "$python312" -m pip install --disable-pip-version-check Pillow
+icon_python="$python312"
+if ! "$icon_python" -c "from PIL import Image" >/dev/null 2>&1; then
+  icon_venv_dir="$repo_root/build/icon-python"
+  icon_python="$icon_venv_dir/bin/python"
+
+  if [[ ! -x "$icon_python" ]]; then
+    echo "Creating isolated Python environment for icon generation: $icon_venv_dir"
+    "$python312" -m venv "$icon_venv_dir"
+  fi
+
+  if ! "$icon_python" -m pip --version >/dev/null 2>&1; then
+    echo "pip is missing in the icon generation environment; bootstrapping with ensurepip..."
+    "$icon_python" -m ensurepip --upgrade
+  fi
+
+  if ! "$icon_python" -c "from PIL import Image" >/dev/null 2>&1; then
+    echo "Pillow is missing; installing Pillow into the isolated icon generation environment..."
+    "$icon_python" -m pip install --disable-pip-version-check Pillow
+  fi
 fi
 
 echo "Generating application icons..."
-"$python312" "$icon_script"
+"$icon_python" "$icon_script"
 
 pushd "$desktop_dir" >/dev/null
 trap 'popd >/dev/null' EXIT
@@ -66,6 +79,14 @@ if [[ "$skip_prebuild" -eq 0 ]]; then
 else
   echo "SkipPrebuild enabled: reusing existing renderer and backend artifacts."
 fi
+
+if [[ ! -f "$web_static_validation_script" ]]; then
+  echo "Web static asset validation script was not found: $web_static_validation_script" >&2
+  exit 1
+fi
+
+echo "Validating web static asset references..."
+node "$web_static_validation_script"
 
 npm run build:electron
 

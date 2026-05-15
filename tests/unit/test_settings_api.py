@@ -509,6 +509,16 @@ def test_ensure_runtime_channel_syncs_base_preserves_cuda(
     gpu_dlls.mkdir(parents=True)
     (base_dir / "python.exe").write_text("base-python", encoding="utf-8")
     (gpu_dir / "python.exe").write_text("gpu-python", encoding="utf-8")
+    (base_dir / "pythonw.exe").write_text("base-pythonw", encoding="utf-8")
+    (gpu_dir / "pythonw.exe").write_text("gpu-pythonw", encoding="utf-8")
+    (base_dir / "python3.dll").write_text("base-python3-dll", encoding="utf-8")
+    (gpu_dir / "python3.dll").write_text("gpu-python3-dll", encoding="utf-8")
+    (base_dir / "python312.dll").write_text("base-python312-dll", encoding="utf-8")
+    (gpu_dir / "python312.dll").write_text("gpu-python312-dll", encoding="utf-8")
+    (base_dir / "vcruntime140.dll").write_text("base-vcruntime", encoding="utf-8")
+    (gpu_dir / "vcruntime140.dll").write_text("gpu-vcruntime", encoding="utf-8")
+    (base_dir / "python312._pth").write_text("base-pth", encoding="utf-8")
+    (gpu_dir / "python312._pth").write_text("gpu-pth", encoding="utf-8")
     (base_stdlib / "filecmp.py").write_text("base-stdlib", encoding="utf-8")
     (gpu_stdlib / "filecmp.py").write_text("old-stdlib", encoding="utf-8")
     (base_dlls / "_sqlite3.pyd").write_text("base-dll", encoding="utf-8")
@@ -594,8 +604,13 @@ def test_ensure_runtime_channel_syncs_base_preserves_cuda(
 
     assert result == gpu_dir
     assert (gpu_dir / "python.exe").read_text(encoding="utf-8") == "gpu-python"
-    assert (gpu_stdlib / "filecmp.py").read_text(encoding="utf-8") == "base-stdlib"
-    assert (gpu_dlls / "_sqlite3.pyd").read_text(encoding="utf-8") == "base-dll"
+    assert (gpu_dir / "pythonw.exe").read_text(encoding="utf-8") == "gpu-pythonw"
+    assert (gpu_dir / "python3.dll").read_text(encoding="utf-8") == "gpu-python3-dll"
+    assert (gpu_dir / "python312.dll").read_text(encoding="utf-8") == "gpu-python312-dll"
+    assert (gpu_dir / "vcruntime140.dll").read_text(encoding="utf-8") == "gpu-vcruntime"
+    assert (gpu_dir / "python312._pth").read_text(encoding="utf-8") == "gpu-pth"
+    assert (gpu_stdlib / "filecmp.py").read_text(encoding="utf-8") == "old-stdlib"
+    assert (gpu_dlls / "_sqlite3.pyd").read_text(encoding="utf-8") == "old-dll"
     assert (gpu_site_packages / "torch" / "cuda_marker.txt").exists()
     assert not (gpu_site_packages / "torch" / "cpu_marker.txt").exists()
     assert (gpu_site_packages / "nvidia_cublas_cu12-0.9.0.dist-info").exists()
