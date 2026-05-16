@@ -363,6 +363,8 @@ def _probe_multimodal_asr(settings: ServiceSettings) -> dict[str, object]:
         if choices:
             message = choices[0].get("message") or {}
             transcript = str(message.get("content") or "").strip()
+            if not transcript:
+                transcript = str(message.get("reasoning_content") or "").strip()
 
     return {
         "ok": True,

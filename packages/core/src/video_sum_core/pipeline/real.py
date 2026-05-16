@@ -932,25 +932,50 @@ class RealPipelineRunner(PipelineRunner):
         # Audio chunking config: split into chunks of 3 minutes
         CHUNK_DURATION_SECONDS = 180  # 3 minutes per chunk
         total_duration = float(duration or 0)
+        ffmpeg_exe = ffmpeg_location()
+        ffprobe_exe = None
+        if ffmpeg_exe is not None:
+            ffprobe_name = "ffprobe.exe" if os.name == "nt" else "ffprobe"
+            ffprobe_exe = ffmpeg_exe.parent / ffprobe_name
+        if ffprobe_exe is None or not ffprobe_exe.is_file():
+            ffprobe_which = shutil.which("ffprobe")
+            if ffprobe_which:
+                ffprobe_exe = Path(ffprobe_which)
 
         # If duration is unknown, try to get it from ffprobe
-        if total_duration <= 0:
+        if total_duration <= 0 and ffprobe_exe is not None:
             try:
                 result = subprocess.run(
-                    ["ffprobe", "-v", "quiet", "-show_entries", "format=duration", "-of", "csv=p=0", str(audio_path)],
-                    capture_output=True, text=True, timeout=30,
+                    [
+                        str(ffprobe_exe),
+                        "-v",
+                        "quiet",
+                        "-show_entries",
+                        "format=duration",
+                        "-of",
+                        "csv=p=0",
+                        str(audio_path),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                    **_windows_hidden_subprocess_kwargs(),
                 )
-                total_duration = float(result.stdout.strip())
+                if result.returncode == 0:
+                    total_duration = float(result.stdout.strip())
             except Exception:
                 total_duration = 0
 
         # Determine if chunking is needed (> 6 minutes or file > 15MB)
         file_size = audio_path.stat().st_size
         needs_chunking = (total_duration > 360) or (file_size > 15 * 1024 * 1024)
+        if needs_chunking and ffmpeg_exe is None:
+            raise VideoSumError("FFmpeg is unavailable, cannot split audio for multimodal ASR.")
+        if needs_chunking and total_duration <= 0:
+            raise VideoSumError("Unable to determine audio duration for multimodal ASR chunking.")
 
-        ext = audio_path.suffix.lower()
         mime_map = {".wav": "audio/wav", ".mp3": "audio/mp3", ".m4a": "audio/mp4", ".ogg": "audio/ogg", ".flac": "audio/flac"}
-        mime_type = mime_map.get(ext, "audio/wav")
 
         headers = {"Content-Type": "application/json"}
         if api_key:
@@ -991,7 +1016,7 @@ class RealPipelineRunner(PipelineRunner):
                         ],
                     }
                 ],
-                "max_completion_tokens": 65536,
+                "max_completion_tokens": 4096,
             }
 
             max_retries = 5
@@ -1031,17 +1056,30 @@ class RealPipelineRunner(PipelineRunner):
 
             return ""
 
-        all_transcripts: list[tuple[float, str]] = []  # (offset, text)
+        # Reject oversized single-chunk payloads (> 12MB raw → ~16MB base64)
+        MAX_SINGLE_CHUNK_BYTES = 12 * 1024 * 1024
+        all_transcripts: list[tuple[float, float, str]] = []  # (offset, duration, text)
 
         if not needs_chunking:
+            if file_size > MAX_SINGLE_CHUNK_BYTES:
+                raise VideoSumError(
+                    f"Audio file too large for single-chunk multimodal ASR "
+                    f"({file_size / 1024 / 1024:.1f}MB > {MAX_SINGLE_CHUNK_BYTES / 1024 / 1024:.0f}MB). "
+                    f"Please enable chunking by ensuring audio duration is known."
+                )
             # Single chunk - send entire audio
             emit("transcribing", 58, "正在发送音频到多模态识别服务", {"provider": "multimodal", "audio_size": file_size})
             transcript = _send_audio_chunk(audio_path, 0.0, 0, 1)
             if not transcript:
                 raise VideoSumError("Multimodal ASR returned empty transcript text.")
-            all_transcripts.append((0.0, transcript))
+            all_transcripts.append((0.0, total_duration or 0, transcript))
         else:
-            # Multiple chunks - split and process
+            # Multiple chunks - split and process with overlap to reduce
+            # missed words at boundaries.  Each chunk (except the first)
+            # starts 2s earlier so the model hears boundary audio in both
+            # adjacent chunks.  This may produce slight duplication in the
+            # merged transcript, which the LLM summariser can handle.
+            CHUNK_OVERLAP_SECONDS = 2
             num_chunks = max(1, int(-(-total_duration // CHUNK_DURATION_SECONDS)))  # ceil division
             emit(
                 "transcribing",
@@ -1053,21 +1091,32 @@ class RealPipelineRunner(PipelineRunner):
             with tempfile.TemporaryDirectory() as tmpdir:
                 for i in range(num_chunks):
                     chunk_start = i * CHUNK_DURATION_SECONDS
+                    chunk_duration = CHUNK_DURATION_SECONDS
+                    if i > 0:
+                        chunk_start -= CHUNK_OVERLAP_SECONDS
+                        chunk_duration += CHUNK_OVERLAP_SECONDS
                     chunk_path = Path(tmpdir) / f"chunk_{i:03d}.mp3"
 
                     # Re-encode to MP3 for reliable splitting and smaller file size
                     ffmpeg_cmd = [
-                        "ffmpeg", "-y",
+                        str(ffmpeg_exe), "-y",
                         "-i", str(audio_path),
                         "-ss", str(chunk_start),
-                        "-t", str(CHUNK_DURATION_SECONDS),
+                        "-t", str(chunk_duration),
                         "-acodec", "libmp3lame",
                         "-ab", "64k",
                         "-ar", "16000",
                         "-ac", "1",
                         str(chunk_path),
                     ]
-                    result = subprocess.run(ffmpeg_cmd, capture_output=True, text=True, timeout=120)
+                    result = subprocess.run(
+                        ffmpeg_cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=120,
+                        check=False,
+                        **_windows_hidden_subprocess_kwargs(),
+                    )
 
                     if not chunk_path.exists() or chunk_path.stat().st_size == 0:
                         logger.warning("multimodal chunk %d/%d extraction failed (offset=%.0fs): %s", i + 1, num_chunks, chunk_start, result.stderr[-200:] if result.stderr else "empty output")
@@ -1078,7 +1127,7 @@ class RealPipelineRunner(PipelineRunner):
 
                     transcript = _send_audio_chunk(chunk_path, chunk_start, i, num_chunks)
                     if transcript:
-                        all_transcripts.append((chunk_start, transcript))
+                        all_transcripts.append((chunk_start, chunk_duration, transcript))
                     else:
                         logger.warning("multimodal chunk %d/%d returned empty transcript after all retries (offset=%.0fs, size=%.0fKB)", i + 1, num_chunks, chunk_start, chunk_size_kb)
 
@@ -1086,7 +1135,7 @@ class RealPipelineRunner(PipelineRunner):
             raise VideoSumError("Multimodal ASR returned empty transcript text.")
 
         # Merge all chunk transcripts
-        full_transcript = "\n".join(text for _, text in all_transcripts)
+        full_transcript = "\n".join(text for _, _, text in all_transcripts)
 
         emit(
             "transcribing",
@@ -1097,8 +1146,8 @@ class RealPipelineRunner(PipelineRunner):
 
         # Build segments with proper timestamps
         segments: list[dict[str, object]] = []
-        for chunk_offset, chunk_text in all_transcripts:
-            chunk_segments = self._build_fallback_segments_from_transcript(chunk_text, CHUNK_DURATION_SECONDS)
+        for chunk_offset, chunk_dur, chunk_text in all_transcripts:
+            chunk_segments = self._build_fallback_segments_from_transcript(chunk_text, chunk_dur)
             for seg in chunk_segments:
                 segments.append({
                     "start": round(seg["start"] + chunk_offset, 3),

@@ -1,12 +1,17 @@
 FROM python:3.12-slim
 
-RUN sed -i 's|http://deb.debian.org|http://mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources \
+ARG APT_MIRROR=http://mirrors.tuna.tsinghua.edu.cn
+
+RUN if [ -n "${APT_MIRROR}" ]; then \
+        sed -i "s|http://deb.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources; \
+    fi \
     && apt-get update && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 ENV PATH=/opt/ffmpeg/bin:${PATH} \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
     VIDEO_SUM_DOCKER=1 \
     VIDEO_SUM_HOST=0.0.0.0 \
     VIDEO_SUM_PORT=3838 \
@@ -19,15 +24,13 @@ ENV PATH=/opt/ffmpeg/bin:${PATH} \
 
 WORKDIR /app
 
-# Layer 1: Install from pre-downloaded wheels (no network needed)
-COPY docker-wheels/ ./wheels/
-RUN pip install --no-index --find-links=./wheels video_sum_service[knowledge] && rm -rf ./wheels
-
-# Layer 2: Copy pre-downloaded vector model
-COPY bge-model/ /root/.cache/huggingface/hub/models--BAAI--bge-small-zh-v1.5/
-
-# Layer 3: Copy app source (changes frequently, does NOT re-trigger pip install)
+COPY pyproject.toml VERSION ./
+COPY packages ./packages
+COPY apps/service ./apps/service
 COPY apps/web/static ./apps/web/static
+
+RUN python -m pip install --upgrade pip setuptools wheel hatchling \
+    && python -m pip install ./packages/infra ./packages/core './apps/service[knowledge]'
 
 RUN mkdir -p /data/cache /data/tasks /data/logs
 

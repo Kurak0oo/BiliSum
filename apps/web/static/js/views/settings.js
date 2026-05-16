@@ -31,6 +31,7 @@ export function renderSettingsView(state) {
   const settings = state.settings || {};
   const info = state.systemInfo || {};
   const env = state.environment || {};
+  const transcriptionProvider = settings.transcription_provider || "siliconflow";
 
   return `
     <section class="settings-grid">
@@ -162,7 +163,7 @@ export function renderSettingsView(state) {
           <!-- 转写模型 -->
           <section class="settings-subsection">
             <h3>转写模型</h3>
-            ${renderSelect("transcription_provider", "转写方式", settings.transcription_provider || "siliconflow", [
+            ${renderSelect("transcription_provider", "转写方式", transcriptionProvider, [
               { value: "siliconflow", label: "硅基流动 API" },
               { value: "multimodal", label: "多模态 ASR (第三方)" },
               ...(env.localAsrInstalled ? [{ value: "local", label: "本地 ASR" }] : [])
@@ -188,16 +189,14 @@ export function renderSettingsView(state) {
               { value: "large-v3-turbo", label: "Large v3 Turbo (最准)" }
             ])}
 
-            <!-- 硅基流动配置 -->
-            <div class="asr-config-group" data-provider="siliconflow">
+            <div class="asr-config-group" data-provider="siliconflow" ${transcriptionProvider === "siliconflow" ? "" : "hidden"}>
               <div class="subsection-divider"><span>硅基流动 ASR 配置</span></div>
               ${renderInput("siliconflow_asr_base_url", "SiliconFlow Base URL", settings.siliconflow_asr_base_url || "https://api.siliconflow.cn/v1", "text", "https://api.siliconflow.cn/v1")}
               ${renderInput("siliconflow_asr_model", "SiliconFlow ASR 模型", settings.siliconflow_asr_model || "TeleAI/TeleSpeechASR", "text", "TeleAI/TeleSpeechASR")}
               ${renderSiliconFlowApiKeyInput(settings.siliconflow_asr_api_key || "")}
             </div>
 
-            <!-- 多模态 ASR 配置 -->
-            <div class="asr-config-group" data-provider="multimodal">
+            <div class="asr-config-group" data-provider="multimodal" ${transcriptionProvider === "multimodal" ? "" : "hidden"}>
               <div class="subsection-divider"><span>多模态 ASR 配置</span></div>
               <span class="input-caption" style="margin-bottom:8px;display:block;color:var(--text-secondary);">使用多模态大模型（如 mimo-v2-omni）通过 chat/completions 接口进行语音转文字。</span>
               ${renderInput("multimodal_asr_base_url", "多模态 ASR Base URL", settings.multimodal_asr_base_url || "", "text", "https://fufu.iqach.top/v1")}
@@ -310,8 +309,8 @@ export function renderSettingsView(state) {
         </div>
         <div class="setting-list">
           ${renderRow("LLM 启用", settings.llm_enabled ? "✓ 是" : "✗ 否", settings.llm_enabled ? "success" : "neutral")}
-          ${renderRow("转写方式", settings.transcription_provider === "siliconflow" ? "硅基流动 API" : settings.transcription_provider === "multimodal" ? "多模态 ASR" : "本地 ASR", settings.transcription_provider === "siliconflow" || settings.transcription_provider === "multimodal" ? "success" : "neutral")}
-          ${settings.transcription_provider === "multimodal" ? `
+          ${renderRow("转写方式", transcriptionProvider === "siliconflow" ? "硅基流动 API" : transcriptionProvider === "multimodal" ? "多模态 ASR" : "本地 ASR", transcriptionProvider === "siliconflow" || transcriptionProvider === "multimodal" ? "success" : "neutral")}
+          ${transcriptionProvider === "multimodal" ? `
           ${renderRow("多模态模型", settings.multimodal_asr_model || "-", settings.multimodal_asr_model ? "success" : "neutral")}
           ${renderRow("多模态 API Key", settings.multimodal_asr_api_key_configured ? "✓ 已配置" : "✗ 未配置", settings.multimodal_asr_api_key_configured ? "success" : "warning")}
           ` : `
