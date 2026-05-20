@@ -186,12 +186,6 @@
     grid-template-columns: 1fr;
   }
 
-  .home-prompt-row,
-  .drag-drop-zone {
-    grid-template-columns: 1fr;
-  }
-
-  .drag-drop-zone .secondary-button,
   .batch-import-actions .primary-button,
   .batch-import-actions .secondary-button {
     width: 100%;
@@ -208,7 +202,7 @@
 
   .summary-preference-menu {
     right: 0;
-    width: min(100%, 280px);
+    width: min(100%, 264px);
   }
 
   .probe-preview {

@@ -97,6 +97,9 @@ type DesktopBridge = {
   };
   media: {
     pickVideoFile(): Promise<string | null>;
+    pickVideoFiles(): Promise<string[]>;
+    getFilePaths(files: File[] | FileList): string[];
+    onFileDrop(listener: (paths: string[]) => void): () => void;
   };
   bilibili: {
     captureLoginCookies(): Promise<BilibiliCookieExportResult>;

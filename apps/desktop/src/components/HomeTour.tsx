@@ -10,14 +10,14 @@ type TourStep = {
 const TOUR_STEPS: TourStep[] = [
   {
     targetSelector: "[data-home-tour='input']",
-    title: "粘贴视频链接",
-    description: "在这里粘贴 Bilibili / YouTube 视频链接，或直接输入 BV 号即可开始。",
+    title: "输入或导入",
+    description: "在这里粘贴 Bilibili / YouTube 视频链接、输入 BV 号，或粘贴/拖入本地媒体文件。",
     placement: "bottom",
   },
   {
     targetSelector: "[data-home-tour='local-video']",
-    title: "导入本地视频",
-    description: "点击此按钮可以选择本地视频文件进行总结。",
+    title: "导入视频",
+    description: "点击此按钮可以选择本地视频或音频文件进行总结，支持批量选择。",
     placement: "bottom",
   },
   {

@@ -25,6 +25,7 @@ class VideoTaskCreateRequest(BaseModel):
 class VideoTaskBatchRequest(BaseModel):
     page_numbers: list[int] = Field(default_factory=list)
     confirm: bool = False
+    prompt_preset_id: str | None = None
 
 
 class AggregateSummaryRequest(BaseModel):

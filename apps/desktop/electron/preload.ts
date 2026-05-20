@@ -1,10 +1,54 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
+
+const fileDropListeners = new Set<(paths: string[]) => void>();
+
+function getFilePaths(files: File[] | FileList | null | undefined) {
+  return Array.from(files || [])
+    .map((file) => webUtils.getPathForFile(file))
+    .filter(Boolean);
+}
+
+function allowFileDrop(event: DragEvent) {
+  event.preventDefault();
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = "copy";
+  }
+}
+
+function registerFileDropGuards(target: Window | Document | HTMLElement | null) {
+  if (!target) {
+    return;
+  }
+  target.addEventListener("dragenter", allowFileDrop as EventListener, true);
+  target.addEventListener("dragover", allowFileDrop as EventListener, true);
+}
+
+registerFileDropGuards(window);
+registerFileDropGuards(document);
+
+window.addEventListener(
+  "drop",
+  (event) => {
+    event.preventDefault();
+    const paths = getFilePaths(event.dataTransfer?.files);
+    if (!paths.length) {
+      return;
+    }
+    window.dispatchEvent(new CustomEvent<string[]>("bilisum:desktop-file-drop", { detail: paths }));
+    for (const listener of fileDropListeners) {
+      listener(paths);
+    }
+  },
+  true,
+);
 
 // 禁用鼠标中键导航（防止打开新窗口）
 // 在 DOM 加载完成后注册事件监听
 document.addEventListener(
   "DOMContentLoaded",
   () => {
+    registerFileDropGuards(document.body);
+
     window.addEventListener(
       "auxclick",
       (event) => {
@@ -27,6 +71,7 @@ document.addEventListener(
       },
       { capture: true },
     );
+
   },
   { once: true },
 );
@@ -137,6 +182,14 @@ const desktop = {
   },
   media: {
     pickVideoFile: () => ipcRenderer.invoke("desktop:media:pick-video-file") as Promise<string | null>,
+    pickVideoFiles: () => ipcRenderer.invoke("desktop:media:pick-video-files") as Promise<string[]>,
+    getFilePaths,
+    onFileDrop: (listener: (paths: string[]) => void) => {
+      fileDropListeners.add(listener);
+      return () => {
+        fileDropListeners.delete(listener);
+      };
+    },
   },
   bilibili: {
     captureLoginCookies: () =>

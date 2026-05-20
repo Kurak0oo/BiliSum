@@ -76,6 +76,7 @@ type PlayerSeekTarget = {
 };
 
 type VideoDetailPageProps = {
+  refreshToken?: number;
   onRefresh(): void;
   onOpenCookieSettings?: () => void;
   onOpenCookieTutorial?: () => void;
@@ -333,7 +334,7 @@ function isBilibiliCookieHelpError(message: string) {
   return /HTTP\s*412|cookies?\.txt|B\s*站返回|Bilibili rejected|风控拦截|登录态|cookiesfrombrowser|DPAPI/i.test(message);
 }
 
-export function VideoDetailPage({ onRefresh, onOpenCookieSettings, onOpenCookieTutorial, onCaptureLoginCookies }: VideoDetailPageProps) {
+export function VideoDetailPage({ refreshToken = 0, onRefresh, onOpenCookieSettings, onOpenCookieTutorial, onCaptureLoginCookies }: VideoDetailPageProps) {
   const { videoId = "" } = useParams();
   const navigate = useNavigate();
   const [video, setVideo] = useState<VideoAssetDetail | null>(null);
@@ -383,6 +384,7 @@ export function VideoDetailPage({ onRefresh, onOpenCookieSettings, onOpenCookieT
   const lastChapterGroupSignatureRef = useRef("");
   const activeVideoIdRef = useRef(videoId);
   const selectedTaskIdRef = useRef<string | null>(null);
+  const lastRefreshTokenRef = useRef(refreshToken);
   const refreshRequestRef = useRef(0);
   const taskContextCacheRef = useRef<Map<string, TaskContext>>(new Map());
   const taskContextPromiseRef = useRef<Map<string, Promise<TaskContext>>>(new Map());
@@ -667,6 +669,17 @@ export function VideoDetailPage({ onRefresh, onOpenCookieSettings, onOpenCookieT
     setSelectedMindMapNodeId(null);
     void refreshDetail({ preferredTaskId: null }).catch(() => undefined);
   }, [videoId]);
+
+  useEffect(() => {
+    if (!videoId) {
+      return;
+    }
+    if (lastRefreshTokenRef.current === refreshToken) {
+      return;
+    }
+    lastRefreshTokenRef.current = refreshToken;
+    void refreshDetail({ preferredTaskId: selectedTaskIdRef.current, syncLibrary: false }).catch(() => undefined);
+  }, [refreshToken]);
 
   const orderedTasks = useMemo(() => [...tasks].sort(compareTasksByRecent), [tasks]);
   const availablePages = video?.pages ?? [];

@@ -2064,6 +2064,7 @@ function createWindow() {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: false,
     },
   });
 
@@ -2455,21 +2456,47 @@ function registerIpcHandlers() {
     }
     clipboard.writeImage(image);
   });
-  ipcMain.handle("desktop:media:pick-video-file", async () => {
+  async function pickMediaFiles() {
     const dialogOptions: OpenDialogOptions = {
-      title: "选择本地视频",
-      properties: ["openFile"],
+      title: "选择本地视频或音频",
+      properties: ["openFile", "multiSelections"],
       filters: [
         {
-          name: "视频文件",
-          extensions: ["mp4", "mov", "mkv", "avi", "wmv", "webm", "flv", "m4v", "ts", "mpeg", "mpg"],
+          name: "媒体文件",
+          extensions: [
+            "mp4",
+            "mov",
+            "mkv",
+            "avi",
+            "wmv",
+            "webm",
+            "flv",
+            "m4v",
+            "ts",
+            "mpeg",
+            "mpg",
+            "mp3",
+            "wav",
+            "m4a",
+            "aac",
+            "flac",
+            "ogg",
+          ],
         },
       ],
     };
     const result = mainWindow
       ? await dialog.showOpenDialog(mainWindow, dialogOptions)
       : await dialog.showOpenDialog(dialogOptions);
-    return result.canceled ? null : result.filePaths[0] ?? null;
+    return result.canceled ? [] : result.filePaths;
+  }
+
+  ipcMain.handle("desktop:media:pick-video-files", async () => {
+    return pickMediaFiles();
+  });
+  ipcMain.handle("desktop:media:pick-video-file", async () => {
+    const filePaths = await pickMediaFiles();
+    return filePaths[0] ?? null;
   });
   ipcMain.handle("desktop:bilibili:capture-login-cookies", async () => openBilibiliLoginAndCaptureCookies());
   ipcMain.handle("desktop:shell:open-path", (_event, targetPath: string) => shell.openPath(targetPath));

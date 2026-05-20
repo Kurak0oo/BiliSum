@@ -28,7 +28,7 @@ import { KnowledgePage } from "./pages/KnowledgePage";
 import { LibraryPage } from "./pages/LibraryPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { VideoDetailPage } from "./pages/VideoDetailPage";
-import type { VideoAssetSummary, VideoPageBatchOption } from "./types";
+import type { VideoAssetSummary, VideoPageBatchOption, VideoProbeResult } from "./types";
 
 const PROMPT_PRESET_STORAGE_KEY = "bilisum.promptPresetId";
 
@@ -52,6 +52,7 @@ export function App() {
   const [multiPageProbeVideo, setMultiPageProbeVideo] = useState<VideoAssetSummary | null>(null);
   const [multiPageOptions, setMultiPageOptions] = useState<VideoPageBatchOption[]>([]);
   const [refreshSeed, setRefreshSeed] = useState(0);
+  const [detailRefreshToken, setDetailRefreshToken] = useState(0);
   const [settingsFocusRequest, setSettingsFocusRequest] = useState<{ issueKey: string; nonce: number } | null>(null);
   const [settingsPromptRequest, setSettingsPromptRequest] = useState<{ presetId: string; nonce: number } | null>(null);
   const [darkMode, setDarkMode] = useState<boolean>(() => {
@@ -575,7 +576,7 @@ export function App() {
     }
   }
 
-  function resolvePromptPresetIdFromPreference(): string | null {
+  function resolveManualPromptPresetId(): string | null {
     try {
       const value = window.localStorage.getItem(PROMPT_PRESET_STORAGE_KEY)?.trim();
       return value && value !== "general" ? value : null;
@@ -584,12 +585,46 @@ export function App() {
     }
   }
 
-  function buildCreateTaskPayload(pageNumber?: number | null) {
+  async function resolveTaskPromptPresetId(sourceText?: string | null): Promise<string | null> {
+    const promptRouterMode = snapshot.settings?.prompt_router_mode || "confirm";
+    if (promptRouterMode !== "auto") {
+      return resolveManualPromptPresetId();
+    }
+    const title = sourceText?.trim();
+    if (!title) {
+      return null;
+    }
+    try {
+      const result = await api.matchPrompt(title);
+      return result.preset.id && result.preset.id !== "general" ? result.preset.id : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function buildCreateTaskPayload(pageNumber?: number | null, sourceText?: string | null) {
     return {
       page_number: pageNumber ?? null,
       visual_note_mode: resolveVisualNoteModeFromPreference(),
-      prompt_preset_id: resolvePromptPresetIdFromPreference(),
+      prompt_preset_id: await resolveTaskPromptPresetId(sourceText),
     };
+  }
+
+  async function createVideoTaskAfterNavigation(video: VideoAssetSummary, sourceText?: string | null) {
+    try {
+      setSubmitStatus("正在匹配摘要 Prompt 并创建任务...");
+      await api.createVideoTask(video.video_id, await buildCreateTaskPayload(null, sourceText || video.title || video.source_url));
+      setSubmitStatus("视频已加入本地库并开始总结");
+      setRefreshSeed((value) => value + 1);
+      setDetailRefreshToken((value) => value + 1);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "创建摘要任务失败";
+      if (isBilibiliCookieHelpError(message)) {
+        showBilibiliCookieHelp(message);
+        return;
+      }
+      setSubmitStatus(message);
+    }
   }
 
   async function handleProbe(event: FormEvent) {
@@ -619,13 +654,54 @@ export function App() {
         setSubmitStatus(`检测到 ${response.pages.length} 个分 P，请先勾选要处理的内容`);
         return;
       }
-      await api.createVideoTask(response.video.video_id, buildCreateTaskPayload());
-      setSubmitStatus(response.cached ? "已从视频库读取并开始总结" : "视频已加入本地库并开始总结");
+      setSubmitStatus(response.cached ? "已从视频库读取，正在进入详情页..." : "视频已加入本地库，正在进入详情页...");
+      const submittedUrl = probeUrl.trim();
       setProbeUrl("");
       setRefreshSeed((value) => value + 1);
       navigate(`/videos/${response.video.video_id}`);
+      void createVideoTaskAfterNavigation(response.video, response.video.title || submittedUrl);
     } catch (error) {
       const message = error instanceof Error ? error.message : "开始总结失败";
+      if (isBilibiliCookieHelpError(message)) {
+        showBilibiliCookieHelp(message);
+        return;
+      }
+      setSubmitStatus(message);
+    }
+  }
+
+  async function createLocalPathTasks(filePaths: string[]) {
+    if (!filePaths.length) {
+      return;
+    }
+
+    setSubmitStatus(
+      filePaths.length > 1 ? `正在读取 ${filePaths.length} 个本地媒体文件并创建任务...` : "正在读取本地媒体信息并准备开始总结...",
+    );
+    try {
+      const responses: VideoProbeResult[] = [];
+      for (const filePath of filePaths) {
+        const response = await api.probeVideo({ url: filePath, force_refresh: false });
+        responses.push(response);
+      }
+      const firstResponse = responses[0];
+      if (!firstResponse) {
+        throw new Error("未返回本地媒体信息。");
+      }
+      setProbePreview(firstResponse.video);
+      setProbeUrl("");
+      setSubmitStatus(
+        responses.length > 1
+          ? `已读取 ${responses.length} 个本地媒体文件，正在后台创建摘要任务...`
+          : firstResponse.cached ? "已从本地媒体库读取，正在进入详情页..." : "本地媒体已加入视频库，正在进入详情页...",
+      );
+      setRefreshSeed((value) => value + 1);
+      navigate(`/videos/${firstResponse.video.video_id}`);
+      void Promise.all(
+        responses.map((response) => createVideoTaskAfterNavigation(response.video, response.video.title || response.video.source_url)),
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "导入本地媒体失败";
       if (isBilibiliCookieHelpError(message)) {
         showBilibiliCookieHelp(message);
         return;
@@ -647,28 +723,10 @@ export function App() {
     }
 
     if (window.desktop?.media) {
-      const filePath = await window.desktop.media.pickVideoFile();
-      if (!filePath) {
-        return;
-      }
-
-      setSubmitStatus("正在读取本地视频信息并准备开始总结...");
-      try {
-        const response = await api.probeVideo({ url: filePath, force_refresh: false });
-        setProbePreview(response.video);
-        await api.createVideoTask(response.video.video_id, buildCreateTaskPayload());
-        setProbeUrl("");
-        setSubmitStatus(response.cached ? "已从本地视频库读取并开始总结" : "本地视频已加入视频库并开始总结");
-        setRefreshSeed((value) => value + 1);
-        navigate(`/videos/${response.video.video_id}`);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "导入本地视频失败";
-        if (isBilibiliCookieHelpError(message)) {
-          showBilibiliCookieHelp(message);
-          return;
-        }
-        setSubmitStatus(message);
-      }
+      const filePaths = window.desktop.media.pickVideoFiles
+        ? await window.desktop.media.pickVideoFiles()
+        : [await window.desktop.media.pickVideoFile()].filter((filePath): filePath is string => Boolean(filePath));
+      await createLocalPathTasks(filePaths);
       return;
     }
 
@@ -701,7 +759,7 @@ export function App() {
     }
 
     setSubmitStatus(
-      files.length > 1 ? `正在上传 ${files.length} 个本地文件并创建任务...` : "正在上传本地视频并准备开始总结...",
+      files.length > 1 ? `正在上传 ${files.length} 个本地媒体文件并创建任务...` : "正在上传本地媒体并准备开始总结...",
     );
     try {
       const responses = files.length > 1
@@ -712,19 +770,19 @@ export function App() {
         throw new Error("未返回上传结果。");
       }
       setProbePreview(firstResponse.video);
-      for (const response of responses) {
-        await api.createVideoTask(response.video.video_id, buildCreateTaskPayload());
-      }
       setProbeUrl("");
       setSubmitStatus(
         responses.length > 1
-          ? `已创建 ${responses.length} 个本地视频摘要任务`
-          : firstResponse.cached ? "已从本地视频库读取并开始总结" : "本地视频已加入视频库并开始总结",
+          ? `已上传 ${responses.length} 个本地媒体文件，正在后台创建摘要任务...`
+          : firstResponse.cached ? "已从本地媒体库读取，正在进入详情页..." : "本地媒体已加入视频库，正在进入详情页...",
       );
       setRefreshSeed((value) => value + 1);
       navigate(`/videos/${firstResponse.video.video_id}`);
+      void Promise.all(
+        responses.map((response) => createVideoTaskAfterNavigation(response.video, response.video.title || response.video.source_url)),
+      );
     } catch (error) {
-      const message = error instanceof Error ? error.message : "导入本地视频失败";
+      const message = error instanceof Error ? error.message : "导入本地媒体失败";
       if (isBilibiliCookieHelpError(message)) {
         showBilibiliCookieHelp(message);
         return;
@@ -737,11 +795,18 @@ export function App() {
     if (!multiPageProbeVideo) {
       throw new Error("当前视频信息已失效，请重新探测。");
     }
-    setSubmitStatus(input.confirm ? "正在确认批量任务..." : "正在创建批量任务...");
-    setProbePreview(multiPageProbeVideo);
-    const response = await api.createVideoTasksBatch(multiPageProbeVideo.video_id, {
+    const currentProbeVideo = multiPageProbeVideo;
+    setSubmitStatus(input.confirm ? "正在确认批量任务..." : "正在进入详情页并准备批量任务...");
+    setProbePreview(currentProbeVideo);
+    setProbeUrl("");
+    setRefreshSeed((value) => value + 1);
+    navigate(`/videos/${currentProbeVideo.video_id}`);
+
+    const promptPresetId = await resolveTaskPromptPresetId(currentProbeVideo.title || currentProbeVideo.source_url);
+    const response = await api.createVideoTasksBatch(currentProbeVideo.video_id, {
       page_numbers: input.pageNumbers,
       confirm: input.confirm,
+      prompt_preset_id: promptPresetId,
     });
     if (response.requires_confirmation) {
       setSubmitStatus(`所选内容中有 ${response.conflict_pages.length} 个分 P 已有成功摘要，请确认后继续。`);
@@ -750,7 +815,6 @@ export function App() {
     setMultiPageDialogOpen(false);
     setMultiPageProbeVideo(null);
     setMultiPageOptions([]);
-    setProbeUrl("");
     const createdCount = response.created_tasks.length;
     const skippedCount = response.skipped_pages.length;
     setSubmitStatus(
@@ -759,7 +823,7 @@ export function App() {
         : `没有创建新任务${skippedCount ? `，已跳过 ${skippedCount} 个分 P` : ""}`,
     );
     setRefreshSeed((value) => value + 1);
-    navigate(`/videos/${multiPageProbeVideo.video_id}`);
+    setDetailRefreshToken((value) => value + 1);
     return response;
   }
 
@@ -818,7 +882,7 @@ export function App() {
         ref={localVideoInputRef}
         type="file"
         multiple
-        accept="video/mp4,video/quicktime,video/x-matroska,video/x-msvideo,video/x-ms-wmv,video/webm,video/x-flv,video/mp2t,video/mpeg,.mp4,.mov,.mkv,.avi,.wmv,.webm,.flv,.m4v,.ts,.mpeg,.mpg"
+        accept="video/mp4,video/quicktime,video/x-matroska,video/x-msvideo,video/x-ms-wmv,video/webm,video/x-flv,video/mp2t,video/mpeg,audio/mpeg,audio/wav,audio/x-wav,audio/mp4,audio/aac,audio/flac,audio/ogg,.mp4,.mov,.mkv,.avi,.wmv,.webm,.flv,.m4v,.ts,.mpeg,.mpg,.mp3,.wav,.m4a,.aac,.flac,.ogg"
         style={{ display: "none" }}
         onChange={(event) => void handleWebLocalVideoPicked(event)}
       />
@@ -947,6 +1011,7 @@ export function App() {
                     onProbe={handleProbe}
                     onImportLocalVideo={handleImportLocalVideo}
                     onImportLocalFiles={handleLocalFilesSelected}
+                    onImportLocalPaths={createLocalPathTasks}
                     canImportLocalVideo={canImportLocalVideo}
                     promptRouterMode={snapshot.settings?.prompt_router_mode || "confirm"}
                     onPromptRouterModeChange={updatePromptRouterMode}
@@ -982,6 +1047,7 @@ export function App() {
                 path="/videos/:videoId"
                 element={(
                   <VideoDetailPage
+                    refreshToken={detailRefreshToken}
                     onRefresh={() => setRefreshSeed((value) => value + 1)}
                     onOpenCookieSettings={openYtdlpCookieSettings}
                     onOpenCookieTutorial={openCookieExportTutorial}

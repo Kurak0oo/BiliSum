@@ -18,6 +18,7 @@ type HomePageProps = {
   onProbe(event: FormEvent): Promise<void>;
   onImportLocalVideo(): Promise<void>;
   onImportLocalFiles(files: File[]): Promise<void>;
+  onImportLocalPaths(paths: string[]): Promise<void>;
   canImportLocalVideo: boolean;
   promptRouterMode: string;
   onPromptRouterModeChange(mode: "auto" | "confirm"): Promise<void>;
@@ -101,56 +102,16 @@ function loadPromptPresetId() {
 
 function isSupportedLocalMediaFile(file: File) {
   const lowerName = file.name.toLowerCase();
+  return isSupportedLocalMediaPath(lowerName);
+}
+
+function isSupportedLocalMediaPath(path: string) {
+  const lowerName = path.toLowerCase();
   const dotIndex = lowerName.lastIndexOf(".");
   if (dotIndex < 0) {
     return false;
   }
   return SUPPORTED_LOCAL_MEDIA_EXTENSIONS.has(lowerName.slice(dotIndex));
-}
-
-type DragDropZoneProps = {
-  isActive: boolean;
-  onDragOver(event: DragEvent<HTMLDivElement>): void;
-  onDragLeave(event: DragEvent<HTMLDivElement>): void;
-  onDrop(event: DragEvent<HTMLDivElement>): void;
-  onPaste(event: ClipboardEvent<HTMLDivElement>): void;
-  onImportLocalVideo(): Promise<void>;
-};
-
-function DragDropZone({
-  isActive,
-  onDragOver,
-  onDragLeave,
-  onDrop,
-  onPaste,
-  onImportLocalVideo,
-}: DragDropZoneProps) {
-  return (
-    <div
-      className={`drag-drop-zone ${isActive ? "is-active" : ""}`}
-      role="button"
-      tabIndex={0}
-      onDragOver={onDragOver}
-      onDragLeave={onDragLeave}
-      onDrop={onDrop}
-      onPaste={onPaste}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          void onImportLocalVideo();
-        }
-      }}
-    >
-      <LocalVideoIcon />
-      <div>
-        <strong>拖入本地视频或音频</strong>
-        <span>支持批量导入，也可以粘贴剪贴板文件。</span>
-      </div>
-      <button className="secondary-button" type="button" onClick={() => void onImportLocalVideo()}>
-        选择文件
-      </button>
-    </div>
-  );
 }
 
 export function HomePage({
@@ -162,6 +123,7 @@ export function HomePage({
   onProbe,
   onImportLocalVideo,
   onImportLocalFiles,
+  onImportLocalPaths,
   canImportLocalVideo,
   promptRouterMode,
   onPromptRouterModeChange,
@@ -185,7 +147,6 @@ export function HomePage({
   const [promptPresets, setPromptPresets] = useState<PromptPreset[]>([]);
   const [hiddenPromptPresetIds, setHiddenPromptPresetIds] = useState<Set<string>>(() => loadHiddenPromptPresetIds());
   const [promptPresetId, setPromptPresetId] = useState(() => loadPromptPresetId());
-  const [recommendedPromptId, setRecommendedPromptId] = useState<string | null>(null);
   const [promptContextMenu, setPromptContextMenu] = useState<{ x: number; y: number; presetId: string } | null>(null);
   const [promptLoading, setPromptLoading] = useState(false);
   const [promptStatus, setPromptStatus] = useState("");
@@ -247,29 +208,6 @@ export function HomePage({
     }
   }, [hiddenPromptPresetIds, promptPresetId, promptPresets]);
 
-  useEffect(() => {
-    const title = probeUrl.trim();
-    if (!title) {
-      setRecommendedPromptId(null);
-      return;
-    }
-    const timer = window.setTimeout(() => {
-      void api.matchPrompt(title).then((result) => {
-        if (hiddenPromptPresetIds.has(result.preset.id)) {
-          setRecommendedPromptId(null);
-          return;
-        }
-        setRecommendedPromptId(result.preset.id);
-        if (promptRouterMode === "auto") {
-          setPromptPresetId(result.preset.id);
-        }
-      }).catch(() => {
-        setRecommendedPromptId(null);
-      });
-    }, 360);
-    return () => window.clearTimeout(timer);
-  }, [hiddenPromptPresetIds, probeUrl, promptRouterMode]);
-
   const showPreferenceHint = preferenceMenuOpen && !preferenceHintDismissed;
 
   function dismissPreferenceHint() {
@@ -285,7 +223,8 @@ export function HomePage({
     }
 
     function handlePointerDown(event: globalThis.MouseEvent) {
-      if (preferenceMenuRef.current?.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (preferenceMenuRef.current?.contains(target) || promptMenuRef.current?.contains(target)) {
         return;
       }
       setPreferenceMenuOpen(false);
@@ -368,10 +307,9 @@ export function HomePage({
       return;
     }
     setPromptModeSaving(true);
-    setPromptStatus(mode === "auto" ? "正在启用 AI 场景识别..." : "正在切换为手动选择...");
+    setPromptStatus("");
     try {
       await onPromptRouterModeChange(mode);
-      setPromptStatus(mode === "auto" ? "已启用 AI 场景识别，会根据标题自动选择摘要提示词。" : "已切换为手动选择 Prompt。");
     } catch (error) {
       setPromptStatus(error instanceof Error ? error.message : "Prompt 模式保存失败");
     } finally {
@@ -392,39 +330,115 @@ export function HomePage({
     setPromptStatus("");
   }
 
-  function handleDrop(event: DragEvent<HTMLDivElement>) {
+  function resolveDesktopFilePaths(files: File[]) {
+    const filePaths = window.desktop?.media?.getFilePaths?.(files) || [];
+    return filePaths.filter(isSupportedLocalMediaPath);
+  }
+
+  function importTransferredFiles(files: Iterable<File>) {
+    const mediaFiles = collectMediaFiles(files);
+    if (!mediaFiles.length) {
+      setPromptStatus("未识别到可导入的媒体文件");
+      return;
+    }
+    const desktopFilePaths = resolveDesktopFilePaths(mediaFiles);
+    if (desktopFilePaths.length) {
+      setPromptStatus("");
+      void onImportLocalPaths(desktopFilePaths);
+      return;
+    }
+    openBatchConfirm(mediaFiles);
+  }
+
+  function handleDrop(event: DragEvent<HTMLElement>) {
     event.preventDefault();
+    event.stopPropagation();
     setIsDragActive(false);
     if (!canImportLocalVideo) {
       return;
     }
-    openBatchConfirm(collectMediaFiles(event.dataTransfer.files));
+    if (!event.dataTransfer.files.length) {
+      return;
+    }
+    importTransferredFiles(event.dataTransfer.files);
   }
 
-  function handleDragOver(event: DragEvent<HTMLDivElement>) {
+  function handleDragOver(event: DragEvent<HTMLElement>) {
     event.preventDefault();
+    event.stopPropagation();
     if (canImportLocalVideo) {
+      event.dataTransfer.dropEffect = "copy";
       setIsDragActive(true);
     }
   }
 
-  function handleDragLeave(event: DragEvent<HTMLDivElement>) {
+  function handleDragLeave(event: DragEvent<HTMLElement>) {
     if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
       setIsDragActive(false);
     }
   }
 
-  function handlePaste(event: ClipboardEvent<HTMLDivElement>) {
+  function handlePaste(event: ClipboardEvent<HTMLElement>) {
     if (!canImportLocalVideo) {
       return;
     }
-    const files = collectMediaFiles(Array.from(event.clipboardData.files));
-    if (!files.length) {
+    if (!event.clipboardData.files.length) {
       return;
     }
     event.preventDefault();
-    openBatchConfirm(files);
+    event.stopPropagation();
+    importTransferredFiles(event.clipboardData.files);
   }
+
+  useEffect(() => {
+    if (!canImportLocalVideo) {
+      return;
+    }
+
+    function handleDesktopFileDrop(event: Event) {
+      const paths = (event as CustomEvent<string[]>).detail || [];
+      const mediaPaths = paths.filter(isSupportedLocalMediaPath);
+      setIsDragActive(false);
+      if (!mediaPaths.length) {
+        setPromptStatus(`未识别到可导入的媒体文件，收到 ${paths.length} 个文件路径`);
+        return;
+      }
+      setPromptStatus(`已接收 ${mediaPaths.length} 个本地媒体文件，正在导入...`);
+      void onImportLocalPaths(mediaPaths);
+    }
+
+    function preventWindowFileNavigation(event: globalThis.DragEvent) {
+      event.preventDefault();
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = "copy";
+      }
+      setIsDragActive(true);
+    }
+
+    function handleWindowDrop(event: globalThis.DragEvent) {
+      event.preventDefault();
+      setIsDragActive(false);
+    }
+
+    function handleWindowDragLeave(event: globalThis.DragEvent) {
+      if (event.relatedTarget === null) {
+        setIsDragActive(false);
+      }
+    }
+
+    window.addEventListener("dragenter", preventWindowFileNavigation, true);
+    window.addEventListener("dragover", preventWindowFileNavigation, true);
+    window.addEventListener("drop", handleWindowDrop, true);
+    window.addEventListener("dragleave", handleWindowDragLeave, true);
+    window.addEventListener("bilisum:desktop-file-drop", handleDesktopFileDrop);
+    return () => {
+      window.removeEventListener("dragenter", preventWindowFileNavigation, true);
+      window.removeEventListener("dragover", preventWindowFileNavigation, true);
+      window.removeEventListener("drop", handleWindowDrop, true);
+      window.removeEventListener("dragleave", handleWindowDragLeave, true);
+      window.removeEventListener("bilisum:desktop-file-drop", handleDesktopFileDrop);
+    };
+  }, [canImportLocalVideo, onImportLocalPaths]);
 
   async function confirmBatchImport() {
     if (!pendingFiles.length) {
@@ -441,7 +455,6 @@ export function HomePage({
 
   const selectablePromptPresets = promptPresets.filter((preset) => !hiddenPromptPresetIds.has(preset.id));
   const selectedPrompt = selectablePromptPresets.find((preset) => preset.id === promptPresetId) || selectablePromptPresets[0] || null;
-  const recommendedPrompt = selectablePromptPresets.find((preset) => preset.id === recommendedPromptId) || null;
   const promptModeLabel = promptRouterMode === "auto" ? "AI 识别场景" : "手动选择";
 
   return (
@@ -449,17 +462,26 @@ export function HomePage({
       <FloatingNoticeStack notices={[{ id: "home-submit-status", message: submitStatus }]} />
       <div className="section">
         <h2 className="section-title">开始总结</h2>
-        <form className="task-form" onSubmit={onProbe}>
+        <form className="task-form" onSubmit={onProbe} onPaste={handlePaste}>
           <div className="task-form-row">
             <label className="input-row input-row-hero" style={{ flex: 1 }}>
-              <div className="input-with-icon" style={{ flex: 1 }} data-home-tour="input">
+              <div
+                className={`input-with-icon local-media-input ${isDragActive ? "is-drag-active" : ""}`.trim()}
+                style={{ flex: 1 }}
+                data-home-tour="input"
+                onDragEnterCapture={handleDragOver}
+                onDragOverCapture={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDropCapture={handleDrop}
+                onPaste={handlePaste}
+              >
                 <span className="input-icon" aria-hidden="true"><LinkIcon /></span>
                 <input
                   className={`input-field input-field-hero ${canImportLocalVideo ? "input-field-with-action" : ""}`.trim()}
                   type="text"
                   value={probeUrl}
                   onChange={(event) => setProbeUrl(event.target.value)}
-                  placeholder="粘贴 Bilibili / YouTube 视频链接，或直接输入 BV 号"
+                  placeholder="粘贴 Bilibili / YouTube 链接、BV 号，或粘贴/拖入本地媒体文件"
                   required
                 />
                 {canImportLocalVideo ? (
@@ -471,6 +493,7 @@ export function HomePage({
                     data-home-tour="local-video"
                     onClick={() => void onImportLocalVideo()}
                   >
+                    <span className="input-inline-action-label">导入视频</span>
                     <LocalVideoIcon />
                   </button>
                 ) : null}
@@ -540,85 +563,67 @@ export function HomePage({
                     />
                     <span>生成导图</span>
                   </label>
+                  <div className="summary-preference-divider" />
+                  <div className="summary-preference-group summary-prompt-group" onContextMenu={openPromptContextMenu}>
+                    <div className="summary-preference-label-row">
+                      <span className="summary-preference-label">摘要 Prompt</span>
+                      <span className="helper-chip">模式 {promptModeLabel}</span>
+                    </div>
+                    <div className="home-prompt-mode" role="group" aria-label="Prompt 模式选择">
+                      <button
+                        className={`home-prompt-mode-option ${promptRouterMode !== "auto" ? "is-active" : ""}`}
+                        type="button"
+                        disabled={promptModeSaving}
+                        onClick={() => void changePromptRouterMode("confirm")}
+                      >
+                        手动选择
+                      </button>
+                      <button
+                        className={`home-prompt-mode-option ${promptRouterMode === "auto" ? "is-active" : ""}`}
+                        type="button"
+                        disabled={promptModeSaving}
+                        onClick={() => void changePromptRouterMode("auto")}
+                      >
+                        AI 识别场景
+                      </button>
+                    </div>
+                    <div className="home-prompt-select-shell">
+                      <select
+                        className="select-field home-prompt-select"
+                        aria-label="选择摘要 Prompt"
+                        value={selectedPrompt?.id || promptPresetId}
+                        disabled={promptRouterMode === "auto" || promptLoading || !selectablePromptPresets.length}
+                        onChange={(event) => updatePromptPreset(event.target.value)}
+                      >
+                        {selectablePromptPresets.map((preset) => (
+                          <option key={preset.id} value={preset.id}>
+                            {preset.name}
+                          </option>
+                        ))}
+                      </select>
+                      <IconChevronDown />
+                    </div>
+                    {selectedPrompt?.description ? (
+                      <span className="home-prompt-description">{selectedPrompt.description}</span>
+                    ) : null}
+                  </div>
                 </div>
               ) : null}
             </div>
           </div>
-          <div className="home-prompt-row" onPaste={handlePaste} onContextMenu={openPromptContextMenu}>
-            <label className="home-prompt-selector">
-              <span className="home-prompt-label">Prompt</span>
-              <select
-                className="select-field home-prompt-select"
-                value={selectedPrompt?.id || promptPresetId}
-                disabled={promptLoading || !selectablePromptPresets.length}
-                onChange={(event) => updatePromptPreset(event.target.value)}
-              >
-                {selectablePromptPresets.map((preset) => (
-                  <option key={preset.id} value={preset.id}>
-                    {preset.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <div className="home-prompt-meta">
-              <div className="home-prompt-mode" role="group" aria-label="Prompt 模式选择">
-                <button
-                  className={`home-prompt-mode-option ${promptRouterMode !== "auto" ? "is-active" : ""}`}
-                  type="button"
-                  disabled={promptModeSaving}
-                  onClick={() => void changePromptRouterMode("confirm")}
-                >
-                  手动选择
-                </button>
-                <button
-                  className={`home-prompt-mode-option ${promptRouterMode === "auto" ? "is-active" : ""}`}
-                  type="button"
-                  disabled={promptModeSaving}
-                  onClick={() => void changePromptRouterMode("auto")}
-                >
-                  AI 识别场景
-                </button>
-              </div>
-              <span className="helper-chip">模式 {promptModeLabel}</span>
-              {recommendedPrompt ? (
-                <button
-                  className="home-prompt-recommendation"
-                  type="button"
-                  onClick={() => updatePromptPreset(recommendedPrompt.id)}
-                >
-                  推荐：{recommendedPrompt.name}
-                </button>
-              ) : null}
-              {selectedPrompt?.description ? (
-                <span className="home-prompt-description">{selectedPrompt.description}</span>
-              ) : null}
-            </div>
-            {promptContextMenu ? (
-              <div
-                className="home-prompt-context-menu"
-                ref={promptMenuRef}
-                role="menu"
-                style={{ left: promptContextMenu.x, top: promptContextMenu.y }}
-              >
-                <button type="button" role="menuitem" onClick={editSelectedPromptPreset}>
-                  编辑
-                </button>
-              </div>
-            ) : null}
-          </div>
         </form>
-
-        {canImportLocalVideo ? (
-          <DragDropZone
-            isActive={isDragActive}
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-            onPaste={handlePaste}
-            onImportLocalVideo={onImportLocalVideo}
-          />
+        {promptContextMenu ? (
+          <div
+            className="home-prompt-context-menu"
+            ref={promptMenuRef}
+            role="menu"
+            style={{ left: promptContextMenu.x, top: promptContextMenu.y }}
+          >
+            <button type="button" role="menuitem" onClick={editSelectedPromptPreset}>
+              编辑
+            </button>
+          </div>
         ) : null}
-
         {pendingFiles.length ? (
           <div className="batch-import-panel" role="dialog" aria-modal="false" aria-label="确认批量导入">
             <div className="batch-import-head">

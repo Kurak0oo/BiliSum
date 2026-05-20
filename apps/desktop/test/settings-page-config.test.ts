@@ -76,12 +76,12 @@ run("prompt templates are validated before settings save", () => {
   assert.ok(settingsPageSource.includes("knowledgeNoteMarkdown"), "knowledge note validation should preserve parseable output field");
   assert.ok(settingsPageSource.includes("{visual_observations_json}"), "visual note validation should require visual observations variable");
 });
-run("prompt floating toolbar can be dragged, closed, and restored", () => {
-  assert.ok(settingsPageSource.includes("promptToolbarClosed"), "toolbar should track closed state");
-  assert.ok(settingsPageSource.includes("setPromptToolbarClosed(false)"), "toolbar should restore when returning to prompt settings");
-  assert.ok(settingsPageSource.includes("startPromptToolbarDrag"), "toolbar should support vertical dragging");
-  assert.ok(settingsPageSource.includes("settings-prompt-toolbar-close"), "toolbar should expose a close button");
-  assert.ok(settingsPageSource.includes("settings-prompt-toolbar-drag"), "toolbar should expose a drag handle");
+run("prompt inline toolbar can collapse prompt groups", () => {
+  assert.ok(settingsPageSource.includes("已展开 {outerSectionsOpen.size} 项"), "toolbar should show expanded prompt group count");
+  assert.ok(settingsPageSource.includes("collapseAllOuter"), "toolbar should collapse all prompt groups");
+  assert.ok(settingsPageSource.includes("settings-prompt-inline-action"), "toolbar should use inline actions");
+  assert.ok(!settingsPageSource.includes("隐藏提示"), "toolbar should not include extra hide/show controls");
+  assert.ok(!settingsPageSource.includes("startPromptToolbarDrag"), "toolbar should not be a draggable floating control");
 });
 run("prompt page floating fab returns to top", () => {
   assert.ok(settingsPageSource.includes("settingsContentScrollRef"), "settings content scroll container should be addressable");
@@ -99,11 +99,12 @@ run("settings return-to-top fab is available across categories", () => {
 
 run("home prompt router calls match API and filters hidden presets", () => {
   const homePageSource = readFileSync(join(projectRoot, "src/pages/HomePage.tsx"), "utf8");
-  assert.ok(homePageSource.includes("api.matchPrompt(title)"), "home page should ask backend to match a prompt for the current input");
-  assert.ok(homePageSource.includes("promptRouterMode === \"auto\""), "auto prompt routing should apply the matched preset");
+  const appSource = readFileSync(join(projectRoot, "src/App.tsx"), "utf8");
+  assert.ok(appSource.includes("api.matchPrompt(title)"), "task creation should ask backend to match a prompt for the final input");
+  assert.ok(appSource.includes("promptRouterMode !== \"auto\""), "manual prompt routing should use the selected preset");
   assert.ok(homePageSource.includes("AI 识别场景"), "home page should expose AI scene recognition mode");
   assert.ok(homePageSource.includes("onPromptRouterModeChange(mode)"), "home page prompt mode selector should persist router mode");
-  assert.ok(homePageSource.includes("hiddenPromptPresetIds.has(result.preset.id)"), "hidden matched presets should not be recommended or auto-selected");
+  assert.ok(homePageSource.includes("disabled={promptRouterMode === \"auto\""), "auto prompt routing should prevent manual dropdown edits");
   assert.ok(homePageSource.includes("selectablePromptPresets.map"), "home prompt dropdown should only render visible presets");
 });
 

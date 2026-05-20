@@ -172,6 +172,7 @@ export type VideoTaskBatchPageResult = {
 export type VideoTaskBatchRequest = {
   page_numbers: number[];
   confirm?: boolean;
+  prompt_preset_id?: string | null;
 };
 
 export type VideoTaskBatchResponse = {

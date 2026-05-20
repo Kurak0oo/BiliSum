@@ -1,4 +1,4 @@
-import { type FocusEvent, type FormEvent, type PointerEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { type FocusEvent, type FormEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 
 import {
@@ -320,9 +320,6 @@ export function SettingsPage({
   const [presetDeleteConfirm, setPresetDeleteConfirm] = useState<string | null>(null);
   const [presetsSectionOpen, setPresetsSectionOpen] = useState(false);
   const [undoPromptValues, setUndoPromptValues] = useState<Record<string, string> | null>(null);
-  const [promptToolbarClosed, setPromptToolbarClosed] = useState(false);
-  const [promptToolbarTop, setPromptToolbarTop] = useState(96);
-  const promptToolbarDragRef = useRef<{ pointerId: number; startY: number; startTop: number } | null>(null);
 
   function emptyPresetForm(): PromptPresetCreateRequest {
     return { name: "", system_prompt: "", user_prompt_template: "", description: "", category: "", auto_match_keywords: [] };
@@ -475,7 +472,7 @@ export function SettingsPage({
             {preset.category && <span className="settings-preset-category">{preset.category}</span>}
             <span className="settings-preset-keywords">{preset.auto_match_keywords?.join("、") || "无匹配关键词"}</span>
           </span>
-          <span className="settings-preset-expand-hint">{isExpanded ? "收起 ▲" : preset.is_builtin ? "查看内容 ▼" : "展开编辑 ▼"}</span>
+          <span className="settings-preset-expand-hint">{isExpanded ? "收起" : preset.is_builtin ? "查看内容" : "编辑"}</span>
           {preset.is_builtin && (
             <button
               className="settings-preset-hide-button"
@@ -571,44 +568,6 @@ export function SettingsPage({
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  function clampPromptToolbarTop(value: number) {
-    if (typeof window === "undefined") {
-      return value;
-    }
-    return Math.max(64, Math.min(value, window.innerHeight - 96));
-  }
-
-  function startPromptToolbarDrag(event: PointerEvent<HTMLDivElement>) {
-    if (event.button !== 0) {
-      return;
-    }
-    event.currentTarget.setPointerCapture(event.pointerId);
-    promptToolbarDragRef.current = {
-      pointerId: event.pointerId,
-      startY: event.clientY,
-      startTop: promptToolbarTop,
-    };
-  }
-
-  function movePromptToolbarDrag(event: PointerEvent<HTMLDivElement>) {
-    const drag = promptToolbarDragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) {
-      return;
-    }
-    setPromptToolbarTop(clampPromptToolbarTop(drag.startTop + event.clientY - drag.startY));
-  }
-
-  function endPromptToolbarDrag(event: PointerEvent<HTMLDivElement>) {
-    const drag = promptToolbarDragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) {
-      return;
-    }
-    promptToolbarDragRef.current = null;
-    try {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    } catch {}
-  }
-
   function handleOuterToggle(name: string, e: React.SyntheticEvent<HTMLDetailsElement>) {
     const open = (e.target as HTMLDetailsElement).open;
     setOuterSectionsOpen((prev) => {
@@ -684,18 +643,9 @@ export function SettingsPage({
 
   useEffect(() => {
     if (activeCategory === "prompts") {
-      setPromptToolbarClosed(false);
       loadPromptPresets();
     }
   }, [activeCategory]);
-
-  useEffect(() => {
-    function handleResize() {
-      setPromptToolbarTop((top) => clampPromptToolbarTop(top));
-    }
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
-  }, []);
 
   useEffect(() => {
     if (!bilibiliQrcodeKey) {
@@ -3115,48 +3065,34 @@ export function SettingsPage({
           )}
 
           {activeCategory === "prompts" && (
-            <section className="settings-category-section">
+            <section className="settings-category-section settings-prompts-section">
               <header className="settings-category-header">
                 <h2>提示词</h2>
                 <p>这里属于高级个性化区域。想改变知识笔记风格时再调整，日常使用保持默认即可。</p>
               </header>
-              <div className="settings-inline-alert info settings-prompt-scope-alert">
-                <strong>生效范围</strong>
-                <span>首页选择的 Prompt 预设只影响摘要生成；知识笔记和图文笔记使用下方全局模板。恢复默认或修改模板后，需要点击左侧“保存设置”才会生效。</span>
+              <div className="settings-prompt-scope-alert">
+                <span className="settings-prompt-scope-kicker">生效范围</span>
+                <p>首页选择的 Prompt 预设只影响摘要生成；知识笔记和图文笔记使用下方全局模板。恢复默认或修改模板后，需要点击左侧“保存设置”才会生效。</p>
               </div>
-              {hasOuterSectionsOpen && !promptToolbarClosed && (
-                <div className="settings-prompt-global-sticky" style={{ top: promptToolbarTop }}>
-                  <button
-                    className="settings-prompt-toolbar-close"
-                    type="button"
-                    aria-label="关闭提示词悬浮栏"
-                    title="关闭提示词悬浮栏"
-                    onClick={() => setPromptToolbarClosed(true)}
-                  >
-                    ×
-                  </button>
-                  <div
-                    className="settings-prompt-toolbar-drag"
-                    role="separator"
-                    aria-orientation="vertical"
-                    aria-label="拖动提示词悬浮栏"
-                    title="上下拖动"
-                    onPointerDown={startPromptToolbarDrag}
-                    onPointerMove={movePromptToolbarDrag}
-                    onPointerUp={endPromptToolbarDrag}
-                    onPointerCancel={endPromptToolbarDrag}
-                  >
-                    <span aria-hidden="true" />
-                    <span aria-hidden="true" />
-                    <span aria-hidden="true" />
-                  </div>
-                  <span className="settings-prompt-toolbar-title">提示词 — {outerSectionsOpen.size} 个分类已展开</span>
-                  <button className="secondary-button" type="button" onClick={(e) => { e.preventDefault(); collapseAllOuter(); }}>折叠所有</button>
+              {hasOuterSectionsOpen && (
+                <div className="settings-prompt-global-sticky">
+                  <span className="settings-prompt-toolbar-title">已展开 {outerSectionsOpen.size} 项</span>
+                  <button className="settings-prompt-inline-action" type="button" onClick={(e) => { e.preventDefault(); collapseAllOuter(); }}>收起全部</button>
                 </div>
               )}
-              <details className="settings-prompt-collapse" ref={(node) => { promptDetailsRefs.current.summary = node; }} onToggle={(e) => handleOuterToggle("summary", e)}>
-                <summary className="settings-prompt-collapse-summary">摘要 Prompt（核心）— 控制视频摘要生成，点击展开</summary>
-                <div className="settings-form-group">
+              <div className="settings-prompt-list">
+                <details className="settings-prompt-collapse" ref={(node) => { promptDetailsRefs.current.summary = node; }} onToggle={(e) => handleOuterToggle("summary", e)}>
+                  <summary className="settings-prompt-collapse-summary">
+                    <span className="settings-prompt-summary-copy">
+                      <span className="settings-prompt-summary-title">摘要 Prompt</span>
+                      <span className="settings-prompt-summary-desc">控制视频摘要的角色、结构和输出格式。</span>
+                    </span>
+                    <span className="settings-prompt-summary-meta">
+                      <span className="settings-prompt-chip accent">核心</span>
+                      <span className="settings-prompt-open-label">展开</span>
+                    </span>
+                  </summary>
+                  <div className="settings-form-group">
                   <label className="settings-input-group" ref={registerFocusTarget("summary_system_prompt") as (node: HTMLLabelElement | null) => void}>
                     <span className="settings-input-label">摘要 System Prompt</span>
                     <textarea
@@ -3195,25 +3131,35 @@ export function SettingsPage({
                       </span>
                     </div>
                   </label>
-                </div>
-              </details>
+                  </div>
+                </details>
 
-              {/* Custom collapse for presets section (no native <details> — breaks position:sticky) */}
-              <div className={`settings-prompt-collapse settings-focus-target ${presetsSectionOpen ? " open" : ""}`} ref={registerFocusTarget("prompt_presets_library") as (node: HTMLDivElement | null) => void}>
-                <div
-                  className="settings-prompt-collapse-summary"
-                  role="button"
-                  tabIndex={0}
-                  onClick={handlePresetsSectionToggle}
-                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handlePresetsSectionToggle(); }}}
-                >
-                  Prompt 预设库（内置 {builtinPresetCount} 个，已隐藏 {hiddenBuiltinPresetCount} 个 / 新增 {customPresetCount} 个），点击展开
-                </div>
-                {presetsSectionOpen && (
-                  <div className="settings-form-group" style={{ position: "relative" }}>
-                    <div className="settings-inline-alert info">
+                {/* Custom collapse for presets section (no native <details> — breaks position:sticky) */}
+                <div className={`settings-prompt-collapse settings-focus-target ${presetsSectionOpen ? " open" : ""}`} ref={registerFocusTarget("prompt_presets_library") as (node: HTMLDivElement | null) => void}>
+                  <div
+                    className="settings-prompt-collapse-summary"
+                    role="button"
+                    tabIndex={0}
+                    aria-expanded={presetsSectionOpen}
+                    onClick={handlePresetsSectionToggle}
+                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handlePresetsSectionToggle(); }}}
+                  >
+                    <span className="settings-prompt-summary-copy">
+                      <span className="settings-prompt-summary-title">Prompt 预设库</span>
+                      <span className="settings-prompt-summary-desc">管理首页摘要 Prompt 下拉框和自动推荐候选。</span>
+                    </span>
+                    <span className="settings-prompt-summary-meta">
+                      <span className="settings-prompt-chip">内置 {builtinPresetCount}</span>
+                      <span className="settings-prompt-chip muted">隐藏 {hiddenBuiltinPresetCount}</span>
+                      <span className="settings-prompt-chip success">新增 {customPresetCount}</span>
+                      <span className="settings-prompt-open-label">展开</span>
+                    </span>
+                  </div>
+                  {presetsSectionOpen && (
+                    <div className="settings-form-group" style={{ position: "relative" }}>
+                    <div className="settings-preset-section-note">
                       <strong>摘要预设</strong>
-                      <span>这些预设用于首页 Prompt 下拉框和自动推荐，只替换摘要 System Prompt / User Template。内置预设可查看或隐藏，隐藏后不会出现在首页 Prompt 下拉框和自动推荐里；新增预设可编辑或删除。</span>
+                      <span>用于首页 Prompt 下拉框和自动推荐，只替换摘要 System Prompt / User Template。内置预设可查看或隐藏，新增预设可编辑或删除。</span>
                     </div>
                     {hiddenBuiltinPresets.length ? (
                       <div className="settings-hidden-preset-list">
@@ -3279,13 +3225,22 @@ export function SettingsPage({
                         + 新建预设
                       </button>
                     )}
-                  </div>
-                )}
-              </div>
+                    </div>
+                  )}
+                </div>
 
-              <details className="settings-prompt-collapse" ref={(node) => { promptDetailsRefs.current.knowledge = node; }} onToggle={(e) => handleOuterToggle("knowledge", e)}>
-                <summary className="settings-prompt-collapse-summary">知识笔记 Prompt — 控制知识笔记生成风格，点击展开</summary>
-                <div className="settings-form-group">
+                <details className="settings-prompt-collapse" ref={(node) => { promptDetailsRefs.current.knowledge = node; }} onToggle={(e) => handleOuterToggle("knowledge", e)}>
+                  <summary className="settings-prompt-collapse-summary">
+                    <span className="settings-prompt-summary-copy">
+                      <span className="settings-prompt-summary-title">知识笔记 Prompt</span>
+                      <span className="settings-prompt-summary-desc">控制知识笔记的整理风格、Markdown 结构和变量使用。</span>
+                    </span>
+                    <span className="settings-prompt-summary-meta">
+                      <span className="settings-prompt-chip">全局模板</span>
+                      <span className="settings-prompt-open-label">展开</span>
+                    </span>
+                  </summary>
+                  <div className="settings-form-group">
                   <label className="settings-input-group" ref={registerFocusTarget("knowledge_note_system_prompt") as (node: HTMLLabelElement | null) => void}>
                     <span className="settings-input-label">知识笔记 System Prompt</span>
                     <textarea
@@ -3333,12 +3288,21 @@ export function SettingsPage({
                       打开教程
                     </button>
                   </div>
-                </div>
-              </details>
+                  </div>
+                </details>
 
-              <details className="settings-prompt-collapse" ref={(node) => { promptDetailsRefs.current.visual = node; }} onToggle={(e) => handleOuterToggle("visual", e)}>
-                <summary className="settings-prompt-collapse-summary">图文笔记 Prompt — 控制 VLM 图文笔记和关键帧解析，点击展开</summary>
-                <div className="settings-form-group">
+                <details className="settings-prompt-collapse" ref={(node) => { promptDetailsRefs.current.visual = node; }} onToggle={(e) => handleOuterToggle("visual", e)}>
+                  <summary className="settings-prompt-collapse-summary">
+                    <span className="settings-prompt-summary-copy">
+                      <span className="settings-prompt-summary-title">图文笔记 Prompt</span>
+                      <span className="settings-prompt-summary-desc">控制关键帧选择、画面理解和图文笔记整合。</span>
+                    </span>
+                    <span className="settings-prompt-summary-meta">
+                      <span className="settings-prompt-chip info">VLM</span>
+                      <span className="settings-prompt-open-label">展开</span>
+                    </span>
+                  </summary>
+                  <div className="settings-form-group">
                   <label className="settings-input-group" ref={registerFocusTarget("visual_note_system_prompt") as (node: HTMLLabelElement | null) => void}>
                   <span className="settings-input-label">图文笔记 System Prompt</span>
                   <textarea
@@ -3417,8 +3381,9 @@ export function SettingsPage({
                     </span>
                   </div>
                 </label>
-                </div>
-              </details>
+                  </div>
+                </details>
+              </div>
 
             </section>
           )}

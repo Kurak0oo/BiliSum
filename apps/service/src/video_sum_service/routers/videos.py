@@ -732,6 +732,7 @@ def create_video_tasks_batch(video_id: str, body: VideoTaskBatchRequest, request
             task_store=task_store,
             video=video,
             page_number=page_number,
+            prompt_preset_id=body.prompt_preset_id,
         )
         created_tasks.append(refreshed.to_detail())
 
