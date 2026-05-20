@@ -726,13 +726,14 @@ def create_video_tasks_batch(video_id: str, body: VideoTaskBatchRequest, request
     if conflict_pages:
         skipped_pages.extend(conflict_pages)
 
+    prompt_preset_id = getattr(body, "prompt_preset_id", None)
     for page_number in creatable_page_numbers:
         refreshed = _create_video_task_record(
             app_state=request.app.state,
             task_store=task_store,
             video=video,
             page_number=page_number,
-            prompt_preset_id=body.prompt_preset_id,
+            prompt_preset_id=prompt_preset_id,
         )
         created_tasks.append(refreshed.to_detail())
 
