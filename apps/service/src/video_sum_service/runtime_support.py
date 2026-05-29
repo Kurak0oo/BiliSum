@@ -12,6 +12,7 @@ import sys
 import tempfile
 import threading
 import textwrap
+import time
 import venv
 from dataclasses import fields
 from pathlib import Path
@@ -229,6 +230,32 @@ def run_host_command(command: list[str], timeout: int = 3600) -> subprocess.Comp
             cwd=repo_root(),
             **windows_hidden_subprocess_kwargs(),
         )
+
+
+def _robust_rmtree(path: Path) -> None:
+    """Remove a directory tree, retrying on Windows when files are locked."""
+    if not path.exists():
+        return
+
+    def _on_error(func, p, exc_info):
+        # WinError 145 "directory not empty" — wait and retry
+        if isinstance(exc_info[1], OSError) and getattr(exc_info[1], "winerror", 0) == 145:
+            time.sleep(0.5)
+            func(p)
+        else:
+            raise
+
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            shutil.rmtree(str(path), onerror=_on_error if os.name == "nt" else None)
+            return
+        except OSError:
+            if attempt + 1 == max_retries:
+                # Last attempt: force with ignore_errors
+                shutil.rmtree(str(path), ignore_errors=True)
+            else:
+                time.sleep(1.0)
 
 
 def uses_current_service_python(runtime_channel: str) -> bool:
@@ -750,9 +777,9 @@ def run_runtime_refresh_with_backup(runtime_dir: Path, backup_dir: Path, refresh
 def prepare_runtime_refresh_backup(runtime_dir: Path, backup_dir: Path) -> None:
     backup_temp_dir = backup_dir.parent / f".{backup_dir.name}-temp"
     if backup_dir.exists():
-        shutil.rmtree(backup_dir)
+        _robust_rmtree(backup_dir)
     if backup_temp_dir.exists():
-        shutil.rmtree(backup_temp_dir)
+        _robust_rmtree(backup_temp_dir)
     try:
         shutil.copytree(runtime_dir, backup_temp_dir)
         shutil.move(str(backup_temp_dir), str(backup_dir))
@@ -770,20 +797,20 @@ def replace_runtime_with_base_copy(
 ) -> None:
     temp_dir = target_dir.parent / f".{runtime_channel}-refresh-temp"
     if temp_dir.exists():
-        shutil.rmtree(temp_dir)
+        _robust_rmtree(temp_dir)
     if target_dir.exists():
         prepare_runtime_refresh_backup(target_dir, backup_dir)
     try:
         shutil.copytree(base_dir, temp_dir)
         if target_dir.exists():
-            shutil.rmtree(target_dir)
+            _robust_rmtree(target_dir)
         shutil.move(str(temp_dir), str(target_dir))
     except Exception:
         if temp_dir.exists():
             shutil.rmtree(temp_dir, ignore_errors=True)
         if backup_dir.exists():
             if target_dir.exists():
-                shutil.rmtree(target_dir)
+                _robust_rmtree(target_dir)
             shutil.move(str(backup_dir), str(target_dir))
         elif target_dir.exists() and runtime_python_executable(runtime_channel) is None:
             shutil.rmtree(target_dir, ignore_errors=True)
@@ -1325,6 +1352,9 @@ def detect_environment(runtime_channel: str | None = None) -> dict[str, object]:
             "localAsrInstalled": False,
             "localAsrAvailable": False,
             "localAsrVersion": "",
+            "funasrInstalled": False,
+            "funasrAvailable": False,
+            "funasrVersion": "",
             "chromadbInstalled": False,
             "chromadbVersion": "",
             "chromadbError": "",
@@ -1720,10 +1750,32 @@ def install_local_asr(reinstall: bool, repository: SqliteTaskRepository, *, sess
 def install_funasr(reinstall: bool, repository: SqliteTaskRepository, *, session_id: str | None = None) -> tuple[dict[str, object], TaskWorker]:
     current_settings = settings_manager.current
     runtime_channel = normalize_runtime_channel(current_settings.runtime_channel, allow_unknown_gpu=True)
+
+    # Pre-flight: if the runtime channel is broken (e.g. Python binary missing
+    # after a partial upgrade or corrupted pip/setuptools), force-rebuild it
+    # from scratch before attempting any pip work.
+    python_executable = runtime_python_executable(runtime_channel)
+    if python_executable is None:
+        logger.warning("runtime channel %s has no python — forcing full rebuild", runtime_channel)
+        target_dir = managed_runtime_dir(runtime_channel)
+        if target_dir.exists():
+            _robust_rmtree(target_dir)
+        # Also clean stale backup/temp dirs
+        for stale in [
+            runtime_refresh_backup_dir(runtime_channel),
+            target_dir.parent / f".{runtime_channel}-refresh-backup-temp",
+            target_dir.parent / f".{runtime_channel}-refresh-temp",
+        ]:
+            if stale.exists():
+                _robust_rmtree(stale)
+
     runtime_dir = ensure_runtime_channel(runtime_channel)
     python_executable = runtime_python_executable(runtime_channel)
     if runtime_dir is None or python_executable is None:
-        raise HTTPException(status_code=500, detail="Managed runtime is unavailable.")
+        raise HTTPException(status_code=500, detail=(
+            "运行环境创建失败。请尝试：1) 重启应用 2) 设置 → 运行环境 → 同步需要更新的 runtime "
+            "3) 手动删除 %s 后重试" % managed_runtime_dir(runtime_channel)
+        ))
 
     # W10: disk space pre-check
     cache_dir = Path.home() / ".cache" / "modelscope"
