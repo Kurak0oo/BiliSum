@@ -1102,9 +1102,6 @@ export function SettingsPage({
   const queuedTaskCount = taskList.filter((task) => task.status === "queued").length;
   const runningTaskCount = taskList.filter((task) => task.status === "running").length;
   const localAsrInstalled = Boolean(environment?.localAsrInstalled);
-      setForm({ ...form, transcription_provider: "siliconflow" });
-    }
-  }, [funasrInstalled]);
 
   const knowledgeDepsReady = Boolean(environment?.knowledgeDependenciesReady);
   const missingKnowledgeDeps = [
