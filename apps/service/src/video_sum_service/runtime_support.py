@@ -11,7 +11,7 @@ import subprocess
 import sys
 import tempfile
 import threading
-import textwrap
+
 import time
 import venv
 from dataclasses import fields
@@ -243,7 +243,17 @@ def _robust_rmtree(path: Path) -> None:
         # WinError 145 "directory not empty" — wait and retry
         if isinstance(exc_info[1], OSError) and getattr(exc_info[1], "winerror", 0) == 145:
             time.sleep(0.5)
-            func(p)
+            try:
+                func(p)
+            except OSError:
+                # Retry failed — let outer loop handle re-rmtree
+                pass
+        elif isinstance(exc_info[1], PermissionError):
+            time.sleep(0.5)
+            try:
+                func(p)
+            except OSError:
+                pass
         else:
             raise
 
@@ -612,6 +622,33 @@ def pip_install_with_fallbacks(
             attempts.append((label, exc))
 
     raise HTTPException(status_code=500, detail=pip_install_error_detail(package_label, attempts))
+
+
+def _run_pip_install(
+    python_executable: Path,
+    runtime_channel: str,
+    packages: list[str],
+    *,
+    package_label: str,
+    reinstall: bool = False,
+    timeout: int = 1800,
+    runner=run_command,
+) -> subprocess.CompletedProcess[str]:
+    """Shared pip install wrapper for install_* functions.
+
+    Calls ``pip_install_with_fallbacks`` with the given parameters and returns
+    the completed process result.  Install functions use this to avoid
+    duplicating the subprocess call + stdout collection pattern.
+    """
+    return pip_install_with_fallbacks(
+        python_executable,
+        runtime_channel,
+        packages,
+        package_label=package_label,
+        reinstall=reinstall,
+        timeout=timeout,
+        runner=runner,
+    )
 
 
 def pip_index_options() -> list[dict[str, str]]:
@@ -1276,87 +1313,8 @@ def detect_environment(runtime_channel: str | None = None) -> dict[str, object]:
             _store_cached_environment_probe(active_channel, payload)
             return payload
 
-    script = textwrap.dedent(
-        """
-        import importlib
-        import importlib.metadata
-        import json
-        import sys
-        torch_error = ""
-        try:
-            import torch
-        except Exception as exc:
-            torch = None
-            torch_error = f"{type(exc).__name__}: {exc}"
-
-        def importable_distribution(distribution_name, import_name):
-            try:
-                version = importlib.metadata.version(distribution_name)
-            except importlib.metadata.PackageNotFoundError:
-                return False, "", ""
-            try:
-                importlib.import_module(import_name)
-            except Exception as exc:
-                return False, version, f"{type(exc).__name__}: {exc}"
-            return True, version, ""
-
-        cuda_available = bool(torch is not None and torch.cuda.is_available())
-        gpu_name = torch.cuda.get_device_name(0) if cuda_available else ""
-        payload = {
-            "pythonVersion": sys.version.split()[0],
-            "torchInstalled": torch is not None,
-            "torchVersion": torch.__version__ if torch is not None else "",
-            "torchError": torch_error,
-            "cudaAvailable": cuda_available,
-            "gpuName": gpu_name,
-            "ytDlpVersion": importlib.metadata.version("yt-dlp"),
-            "localAsrVersion": "",
-            "localAsrInstalled": False,
-            "localAsrAvailable": False,
-            "chromadbVersion": "",
-            "chromadbInstalled": False,
-            "chromadbError": "",
-            "sentenceTransformersVersion": "",
-            "sentenceTransformersInstalled": False,
-            "sentenceTransformersError": "",
-            "knowledgeDependenciesReady": False,
-            "knowledgeDependenciesError": "",
-            "ffmpegLocation": "",
-            "recommendedModel": "large-v3-turbo" if cuda_available else "base",
-            "recommendedDevice": "cuda" if cuda_available else "cpu",
-        }
-        try:
-            payload["localAsrVersion"] = importlib.metadata.version("faster-whisper")
-            payload["localAsrInstalled"] = True
-            payload["localAsrAvailable"] = True
-        except importlib.metadata.PackageNotFoundError:
-            pass
-        funasr_installed, funasr_version, funasr_error = importable_distribution("funasr", "funasr")
-        payload["funasrVersion"] = funasr_version
-        payload["funasrInstalled"] = funasr_installed
-        payload["funasrAvailable"] = funasr_installed
-        chromadb_installed, chromadb_version, chromadb_error = importable_distribution("chromadb", "chromadb")
-        payload["chromadbVersion"] = chromadb_version
-        payload["chromadbInstalled"] = chromadb_installed
-        payload["chromadbError"] = chromadb_error
-        st_installed, st_version, st_error = importable_distribution("sentence-transformers", "sentence_transformers")
-        payload["sentenceTransformersVersion"] = st_version
-        payload["sentenceTransformersInstalled"] = st_installed
-        payload["sentenceTransformersError"] = st_error
-        payload["knowledgeDependenciesReady"] = bool(
-            payload.get("chromadbInstalled") and payload.get("sentenceTransformersInstalled")
-        )
-        if not payload["knowledgeDependenciesReady"]:
-            errors = [
-                value for value in [
-                    payload.get("chromadbError"),
-                    payload.get("sentenceTransformersError"),
-                ] if value
-            ]
-            payload["knowledgeDependenciesError"] = "\\n".join(errors)
-        print(json.dumps(payload, ensure_ascii=False))
-        """
-    ).strip()
+    probe_script_path = Path(__file__).parent / "probe_script.py"
+    script = probe_script_path.read_text(encoding="utf-8")
 
     probe_failed = False
     try:
@@ -1374,6 +1332,8 @@ def detect_environment(runtime_channel: str | None = None) -> dict[str, object]:
                 exc,
                 failure_detail[-1200:],
             )
+            if len(_environment_probe_failures) >= 100:
+                _environment_probe_failures.pop(next(iter(_environment_probe_failures)))
             _environment_probe_failures[active_channel] = failure_detail
         payload = {
             "pythonVersion": "",
@@ -1752,7 +1712,7 @@ def install_local_asr(reinstall: bool, repository: SqliteTaskRepository, *, sess
     try:
         install_workspace_packages(python_executable, runtime_channel=runtime_channel)
         ensure_runtime_pip(python_executable, runtime_channel)
-        result = pip_install_with_fallbacks(
+        result = _run_pip_install(
             python_executable,
             runtime_channel,
             ["faster-whisper>=1.1.1"],
@@ -1873,7 +1833,7 @@ def install_funasr(reinstall: bool, repository: SqliteTaskRepository, *, session
             logger.info("torch not found — will install torch + torchaudio with funasr")
             funasr_packages = ["torch", "torchaudio"] + funasr_packages
 
-        result = pip_install_with_fallbacks(
+        result = _run_pip_install(
             python_executable,
             runtime_channel,
             funasr_packages,

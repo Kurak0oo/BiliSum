@@ -32,7 +32,7 @@ def _minimal_environment_snapshot(current_settings: ServiceSettings) -> dict[str
 def initialize_runtime_startup_state(app_state: Any, current_settings: ServiceSettings) -> None:
     app_state.runtime_startup_lock = Lock()
     app_state.runtime_startup_shutdown = False
-    app_state.pending_mindmap_jobs = []
+    app_state.pending_mindmap_jobs: list[dict[str, object]] = []
     app_state.runtime_startup = {
         "status": "initializing",
         "message": "Runtime worker is initializing.",

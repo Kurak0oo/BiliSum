@@ -6,6 +6,8 @@ import json
 import os
 import shutil
 import sys
+import threading
+import time
 from pathlib import Path
 
 
@@ -13,11 +15,11 @@ APP_SLUG = "bilisum"
 LEGACY_APP_SLUG = "briefvid"
 DOCKER_DATA_ROOT = Path("/data")
 _DLL_DIRECTORY_HANDLES: dict[str, object] = {}
+_DLL_DIRECTORY_LOCK = threading.Lock()
 _LEGACY_APP_DATA_MIGRATION_DONE = False
 _RUNTIME_APP_PACKAGE_PREFIXES: tuple[str, ...] = (
     "video_sum_",
 )
-_RUNTIME_PACKAGING_PACKAGE_KEYS: frozenset[str] = frozenset()
 
 
 def _env_flag(name: str) -> bool:
@@ -204,17 +206,7 @@ def runtime_scripts_dir(runtime_dir: Path) -> Path:
 
 
 def runtime_site_packages_dir(runtime_channel: str) -> Path:
-    runtime_dir = managed_runtime_dir(runtime_channel)
-    legacy_dir = runtime_dir / "Lib" / "site-packages"
-    if legacy_dir.exists():
-        return legacy_dir
-    lib_dir = runtime_dir / "lib"
-    if lib_dir.exists():
-        versioned_dirs = sorted(lib_dir.glob("python*/site-packages"))
-        if versioned_dirs:
-            return versioned_dirs[-1]
-    version = f"python{sys.version_info.major}.{sys.version_info.minor}"
-    return lib_dir / version / "site-packages"
+    return _runtime_site_packages_dir_for(managed_runtime_dir(runtime_channel))
 
 
 def _runtime_site_packages_dir_for(runtime_dir: Path) -> Path:
@@ -245,8 +237,6 @@ def _runtime_site_package_key(item: Path) -> str:
 
 def _runtime_extension_should_preserve(item: Path) -> bool:
     key = _runtime_site_package_key(item)
-    if key in _RUNTIME_PACKAGING_PACKAGE_KEYS:
-        return False
     return not any(key.startswith(prefix) for prefix in _RUNTIME_APP_PACKAGE_PREFIXES)
 
 
@@ -538,32 +528,55 @@ def activate_runtime_dll_directories(runtime_channel: str) -> None:
             resolved = directory
         desired_keys.add(str(resolved).lower())
 
-    for key, handle in list(_DLL_DIRECTORY_HANDLES.items()):
-        path = Path(key)
-        try:
-            inside_runtime_root = path.is_relative_to(resolved_runtime_root)
-        except ValueError:
-            inside_runtime_root = False
-        if inside_runtime_root and key not in desired_keys:
-            close = getattr(handle, "close", None)
-            if close is not None:
-                close()
-            _DLL_DIRECTORY_HANDLES.pop(key, None)
+    with _DLL_DIRECTORY_LOCK:
+        for key, handle in list(_DLL_DIRECTORY_HANDLES.items()):
+            path = Path(key)
+            try:
+                inside_runtime_root = path.is_relative_to(resolved_runtime_root)
+            except ValueError:
+                inside_runtime_root = False
+            if inside_runtime_root and key not in desired_keys:
+                close = getattr(handle, "close", None)
+                if close is not None:
+                    close()
+                _DLL_DIRECTORY_HANDLES.pop(key, None)
 
-    for directory in desired_dirs:
-        if not directory.exists():
-            continue
+        for directory in desired_dirs:
+            if not directory.exists():
+                continue
+            try:
+                resolved = directory.resolve()
+            except OSError:
+                resolved = directory
+            key = str(resolved).lower()
+            if key in _DLL_DIRECTORY_HANDLES:
+                continue
+            try:
+                _DLL_DIRECTORY_HANDLES[key] = add_dll_directory(str(resolved))
+            except OSError:
+                continue
+
+
+def _robust_shutil_move(src: str, dst: str) -> None:
+    for attempt in range(3):
         try:
-            resolved = directory.resolve()
+            shutil.move(src, dst)
+            return
         except OSError:
-            resolved = directory
-        key = str(resolved).lower()
-        if key in _DLL_DIRECTORY_HANDLES:
-            continue
+            if attempt == 2:
+                raise
+            time.sleep(1)
+
+
+def _robust_shutil_copytree(src: Path, dst: Path, **kwargs: object) -> None:
+    for attempt in range(3):
         try:
-            _DLL_DIRECTORY_HANDLES[key] = add_dll_directory(str(resolved))
+            shutil.copytree(src, dst, **kwargs)
+            return
         except OSError:
-            continue
+            if attempt == 2:
+                raise
+            time.sleep(1)
 
 
 def bootstrap_managed_runtime(runtime_channel: str = "base") -> Path | None:
@@ -602,9 +615,9 @@ def bootstrap_managed_runtime(runtime_channel: str = "base") -> Path | None:
 
     moved_extension_names: list[str] = []
     if runtime_dir.exists():
-        shutil.move(str(runtime_dir), str(refresh_backup_dir))
+        _robust_shutil_move(str(runtime_dir), str(refresh_backup_dir))
     try:
-        shutil.copytree(seed_dir, runtime_dir, dirs_exist_ok=True)
+        _robust_shutil_copytree(seed_dir, runtime_dir, dirs_exist_ok=True)
         if can_preserve_extensions and refresh_backup_dir.exists():
             moved_extension_names = _move_preserved_runtime_extensions(refresh_backup_dir, runtime_dir)
         if legacy_extension_backup_dir.exists():
@@ -615,7 +628,7 @@ def bootstrap_managed_runtime(runtime_channel: str = "base") -> Path | None:
                 _move_runtime_site_package_items(runtime_dir, refresh_backup_dir, moved_extension_names)
             if runtime_dir.exists():
                 shutil.rmtree(runtime_dir)
-            shutil.move(str(refresh_backup_dir), str(runtime_dir))
+            _robust_shutil_move(str(refresh_backup_dir), str(runtime_dir))
         raise
     finally:
         if refresh_backup_dir.exists():
@@ -632,6 +645,9 @@ def runtime_metadata_path(runtime_channel: str) -> Path:
 def write_runtime_metadata(runtime_channel: str, payload: dict[str, object]) -> None:
     target = runtime_metadata_path(runtime_channel)
     target.parent.mkdir(parents=True, exist_ok=True)
+    # target.parent = managed_runtime_dir(channel); read_runtime_metadata appends
+    # "video_sum_runtime.json" to the directory path, so passing target.parent
+    # correctly reads the existing metadata from the same file being written.
     current = read_runtime_metadata(target.parent)
     target.write_text(
         json.dumps({**current, **payload}, ensure_ascii=False, indent=2),
