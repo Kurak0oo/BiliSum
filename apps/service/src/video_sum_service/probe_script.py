@@ -2,9 +2,11 @@
 
 Read by runtime_support.py and passed to ``python -c`` to inspect the
 runtime Python's installed packages and capabilities.
-"""
 
-from __future__ import annotations
+NOTE: Do NOT add ``from __future__ import annotations`` here — this script
+is executed via ``python -c`` by concatenating test shims, and __future__
+imports must appear at the very start of the file.
+"""
 
 import importlib
 import importlib.metadata
