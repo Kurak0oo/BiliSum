@@ -1969,8 +1969,14 @@ export function SettingsPage({
               <span className="settings-hero-chip">
                 {environment?.runtimeChannel || form.runtime_channel || "base"}
               </span>
-              <span className={`settings-hero-chip ${environment?.cudaAvailable ? "is-success" : ""}`}>
-                {environment?.cudaAvailable ? "CUDA Ready" : "CPU Only"}
+              <span className={`settings-hero-chip ${(form.transcription_provider === "funasr" ? form.funasr_device === "cuda" : environment?.cudaAvailable) ? "is-success" : ""}`}>
+                {form.transcription_provider === "funasr"
+                  ? (form.funasr_device === "cuda" ? "GPU (CUDA)" : "CPU")
+                  : form.transcription_provider === "local"
+                    ? devicePreferenceLabel(form.whisper_device)
+                    : environment?.cudaAvailable
+                      ? "CUDA Ready"
+                      : "CPU Only"}
               </span>
               <span className={`settings-hero-chip ${llmReady ? "is-success" : ""}`}>
                 {llmReady ? "LLM 已配置" : form.llm_enabled ? "LLM 待补全" : "LLM 关闭"}
@@ -3687,15 +3693,15 @@ export function SettingsPage({
                     {cudaInstalling ? "安装中..." : "安装 CUDA 支持"}
                   </button>
                 </div>
-              </div>
-              {(cudaInstalling || cudaStatus || cudaOutput) ? (
-                <div className="settings-form-group">
-                  <div className="settings-input-group">
-                    <span className="settings-input-label">CUDA 安装输出</span>
-                    <textarea className="textarea-field log-viewer" rows={12} readOnly value={cudaOutput || (cudaInstalling ? "安装中..." : cudaStatus)} />
+                {(cudaInstalling || cudaStatus || cudaOutput) ? (
+                  <div className="settings-form-group">
+                    <div className="settings-input-group">
+                      <span className="settings-input-label">CUDA 安装输出</span>
+                      <textarea className="textarea-field log-viewer" rows={12} readOnly value={cudaOutput || (cudaInstalling ? "安装中..." : cudaStatus)} />
+                    </div>
                   </div>
-                </div>
-              ) : null}
+                ) : null}
+              </div>
               <div className="settings-cuda-section">
                 <h3 className="settings-cuda-title">运行环境更新检查</h3>
                 <div className="settings-runtime-toolbar">
@@ -3724,6 +3730,9 @@ export function SettingsPage({
                     {runtimeSyncing ? "同步中..." : "同步需要更新的 runtime"}
                   </button>
                 </div>
+                {runtimeStatusMessage ? (
+                  <p className="settings-input-caption" style={{ marginTop: 8 }}>{runtimeStatusMessage}</p>
+                ) : null}
                 <div className="runtime-channel-list" role="list">
                   {(runtimeStatus?.channels || []).map((channel) => (
                     <div className="runtime-channel-row" key={channel.runtimeChannel} role="listitem">
