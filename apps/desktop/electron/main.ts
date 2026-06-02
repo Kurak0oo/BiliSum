@@ -1289,14 +1289,14 @@ function updateSplashMessage(message: string) {
   if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) {
     return;
   }
-  void mainWindow.webContents.executeJavaScript(`window.updateStatusMessage(${JSON.stringify(message)})`);
+  mainWindow.webContents.executeJavaScript(`window.updateStatusMessage(${JSON.stringify(message)})`).catch(() => {});
 }
 
 function updateSplashProgress(pct: number) {
   if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) {
     return;
   }
-  void mainWindow.webContents.executeJavaScript(`window.updateSplashProgress(${pct})`);
+  mainWindow.webContents.executeJavaScript(`window.updateSplashProgress(${pct})`).catch(() => {});
 }
 
 function sendBackendStatus() {
