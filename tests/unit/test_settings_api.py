@@ -2750,3 +2750,87 @@ def test_asr_connection_accepts_empty_transcript_when_endpoint_responds(monkeypa
     assert response["ok"] is True
     assert "接口已响应，但测试音频未返回文本" in str(response["message"])
     assert response["responsePreview"] == ""
+
+
+# ═══════════════════════════════════════════════
+# probe_script.py packaging regression tests
+# ═══════════════════════════════════════════════
+
+_SRC_PROBE = Path(__file__).resolve().parents[2] / "apps" / "service" / "src" / "video_sum_service" / "probe_script.py"
+
+
+def _read_probe_script_source() -> str:
+    """Read probe_script.py from the source tree (not the installed package)."""
+    if _SRC_PROBE.exists():
+        return _SRC_PROBE.read_text(encoding="utf-8")
+    # Fallback: installed package
+    import video_sum_service.runtime_support as rs
+    probe_path = Path(rs.__file__).parent / "probe_script.py"
+    return probe_path.read_text(encoding="utf-8")
+
+
+def test_probe_script_file_exists() -> None:
+    """probe_script.py must exist alongside runtime_support.py for detect_environment()."""
+    import video_sum_service.runtime_support as rs
+    probe_path = Path(rs.__file__).parent / "probe_script.py"
+    assert probe_path.exists(), f"probe_script.py missing at {probe_path}"
+
+
+def test_probe_script_is_readable_and_valid_python() -> None:
+    """probe_script.py must parse as valid Python."""
+    import ast
+    source = _read_probe_script_source()
+    try:
+        ast.parse(source)
+    except SyntaxError as e:
+        pytest.fail(f"probe_script.py has syntax error: {e}")
+
+
+def test_probe_script_no_future_annotations() -> None:
+    """Regression: __future__ import breaks python -c concatenation in tests/CI."""
+    import ast
+    source = _read_probe_script_source()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "__future__":
+            names = [alias.name for alias in node.names]
+            pytest.fail(f"probe_script.py has __future__ import: {names}")
+
+
+def test_probe_script_contains_probe_and_main() -> None:
+    """probe_script.py must define probe() and a __main__ entry point."""
+    source = _read_probe_script_source()
+    assert "def probe()" in source, "probe_script.py missing probe() function"
+    assert 'if __name__ == "__main__"' in source, "probe_script.py missing __main__ guard"
+
+
+def test_detect_environment_reads_probe_script(monkeypatch, tmp_path: Path) -> None:
+    """detect_environment() successfully reads and executes probe_script.py."""
+    import video_sum_service.runtime_support as rs
+
+    current = ServiceSettings(cache_dir=tmp_path / "cache", runtime_channel="base")
+    current.cache_dir.mkdir(parents=True)
+    rs._environment_probe_cache.clear()
+    rs._environment_probe_failures.clear()
+    monkeypatch.setattr(rs.settings_manager, "_settings", current)
+    monkeypatch.setattr(rs, "uses_current_service_python", lambda _: True)
+    monkeypatch.setattr(sys, "executable", sys.executable)
+
+    capture: list[list[str]] = []
+    def fake_run_host_command(command, timeout=120):
+        capture.append(command)
+        return subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=True,
+        )
+
+    monkeypatch.setattr(rs, "run_host_command", fake_run_host_command)
+
+    environment = rs.detect_environment("base")
+    assert capture, "detect_environment did not run any command"
+    # The command should include the probe script content, not a FileNotFoundError
+    assert environment.get("pythonVersion"), "probe returned no pythonVersion"
+    assert environment.get("torchInstalled") is not None, "probe returned no torchInstalled"
