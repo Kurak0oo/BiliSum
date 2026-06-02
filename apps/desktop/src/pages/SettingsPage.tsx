@@ -149,8 +149,8 @@ function selectMaskedApiKey(event: FocusEvent<HTMLInputElement>) {
 }
 
 const SETTINGS_SEARCH_ITEMS: SettingsSearchItem[] = [
-  { category: "maintenance", targetKey: "host", title: "监听地址", description: "服务绑定的 IP 地址。", keywords: ["host", "ip", "地址", "服务入口"] },
-  { category: "maintenance", targetKey: "port", title: "监听端口", description: "后端服务端口号。", keywords: ["port", "端口", "3838"] },
+  { category: "logs", targetKey: "host", title: "监听地址", description: "服务绑定的 IP 地址。", keywords: ["host", "ip", "地址", "服务入口"] },
+  { category: "logs", targetKey: "port", title: "监听端口", description: "后端服务端口号。", keywords: ["port", "端口", "3838"] },
   { category: "files", targetKey: "data_dir", title: "数据目录", description: "视频摘要和元数据保存位置。", keywords: ["data", "目录", "存储", "数据库"] },
   { category: "files", targetKey: "cache_dir", title: "缓存目录", description: "临时缓存文件保存位置。", keywords: ["cache", "缓存", "临时文件"] },
   { category: "files", targetKey: "tasks_dir", title: "任务目录", description: "任务历史和结果文件位置。", keywords: ["task", "tasks", "任务", "历史"] },
@@ -260,6 +260,30 @@ export function SettingsPage({
   const [cudaOutput, setCudaOutput] = useState("");
   const [cudaInstalling, setCudaInstalling] = useState(false);
   const [cudaProgress, setCudaProgress] = useState(0);
+  const [closeBehavior, setCloseBehavior] = useState<"tray" | "exit">("tray");
+  const [autoLaunchEnabled, setAutoLaunchEnabled] = useState(false);
+  const [silentStartEnabled, setSilentStartEnabled] = useState(false);
+  const [crashAutoRestart, setCrashAutoRestart] = useState(false);
+  const [logAutoRefresh, setLogAutoRefresh] = useState(false);
+  const [logLevelFilter, setLogLevelFilter] = useState<"all" | "ERROR" | "WARNING" | "INFO">("all");
+  const logTextareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Load desktop preferences once
+  useEffect(() => {
+    void (async () => {
+      const [cb, al, ss, cr] = await Promise.all([
+        window.desktop?.preferences?.getCloseBehavior(),
+        window.desktop?.app?.getAutoLaunch(),
+        window.desktop?.preferences?.getSilentStart(),
+        window.desktop?.preferences?.getCrashAutoRestart(),
+      ]);
+      if (cb) setCloseBehavior(cb as "tray" | "exit");
+      if (typeof al === "boolean") setAutoLaunchEnabled(al);
+      if (typeof ss === "boolean") setSilentStartEnabled(ss);
+      if (typeof cr === "boolean") setCrashAutoRestart(cr);
+    })();
+  }, []);
+
   const [localAsrStatus, setLocalAsrStatus] = useState("");
   const [localAsrOutput, setLocalAsrOutput] = useState("");
   const [localAsrInstalling, setLocalAsrInstalling] = useState(false);
@@ -721,6 +745,32 @@ export function SettingsPage({
       setLogOutput(error instanceof Error ? error.message : "读取日志失败");
     }
   }
+
+  // Auto-refresh logs every 5s
+  useEffect(() => {
+    if (!logAutoRefresh) return;
+    const timer = setInterval(() => { void refreshLogs(); }, 5000);
+    return () => clearInterval(timer);
+  }, [logAutoRefresh]);
+
+  // Auto-scroll log textarea to bottom on update
+  useEffect(() => {
+    const el = logTextareaRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [logOutput]);
+
+  const filteredLogOutput = logLevelFilter === "all"
+    ? logOutput
+    : logOutput.split("\n").filter((line) => line.includes(logLevelFilter)).join("\n");
+
+  // Auto-scroll log textarea to bottom on update
+  useEffect(() => {
+    const el = logTextareaRef.current;
+    if (!el) return;
+    requestAnimationFrame(() => {
+      el.scrollTop = el.scrollHeight;
+    });
+  }, [filteredLogOutput]);
 
   async function refreshRuntimeStatus(options: { silent?: boolean } = {}) {
     try {
@@ -1230,7 +1280,7 @@ export function SettingsPage({
     if (!String(nextForm.host || "").trim()) {
       return {
         message: "请先填写监听地址。",
-        category: "maintenance",
+        category: "logs",
         targetKey: "host",
       };
     }
@@ -1840,7 +1890,7 @@ export function SettingsPage({
             <div className="settings-nav-brand-metrics">
               <div className="settings-nav-metric">
                 <span>服务</span>
-                <strong>{serviceOnline ? "在线" : "离线"}</strong>
+                <strong>{serviceOnline ? "在线" : backendRunning ? "启动中" : "离线"}</strong>
               </div>
               <div className="settings-nav-metric">
                 <span>设备</span>
@@ -1961,8 +2011,8 @@ export function SettingsPage({
               <p>{activeCategoryMeta.description}</p>
             </div>
             <div className="settings-page-hero-meta">
-              <span className={`settings-hero-chip ${serviceOnline ? "is-success" : "is-danger"}`}>
-                {serviceOnline ? "服务在线" : "服务离线"}
+              <span className={`settings-hero-chip ${serviceOnline ? "is-success" : backendRunning ? "is-warning" : "is-danger"}`}>
+                {serviceOnline ? "服务在线" : backendRunning ? "启动中..." : "服务离线"}
               </span>
               <span className={`settings-hero-chip ${configHealth.hasBlockingIssues ? "is-danger" : !configHealth.isConfigured ? "is-warning" : "is-success"}`}>
                 {configHealth.hasBlockingIssues ? "配置缺失" : configHealth.isConfigured ? "配置完整" : "配置待补全"}
@@ -1982,8 +2032,9 @@ export function SettingsPage({
               <span className={`settings-hero-chip ${llmReady ? "is-success" : ""}`}>
                 {llmReady ? "LLM 已配置" : form.llm_enabled ? "LLM 待补全" : "LLM 关闭"}
               </span>
-              <span className={`settings-hero-chip ${form.knowledge_enabled && environment?.knowledgeDependenciesReady ? "is-success" : form.knowledge_enabled ? "is-warning" : ""}`}>
-                {form.knowledge_enabled ? (environment?.knowledgeDependenciesReady ? "知识库就绪" : "知识库待安装") : "知识库关闭"}
+              <span className={`settings-hero-chip ${form.knowledge_enabled && environment?.knowledgeDependenciesReady ? "is-success" : form.knowledge_enabled && environment?.runtimeReady !== undefined ? "is-warning" : ""}`}>
+                {!environment?.runtimeReady && !environment?.runtimeError ? "检测中..."
+                  : form.knowledge_enabled ? (environment?.knowledgeDependenciesReady ? "知识库就绪" : "需安装依赖") : "知识库关闭"}
               </span>
             </div>
           </header>
@@ -2210,80 +2261,7 @@ export function SettingsPage({
             </section>
           )}
 
-          {activeCategory === "maintenance" && (
-            <section className="settings-category-section">
-              <header className="settings-category-header">
-                <h2>维护与诊断</h2>
-                <p>服务监听地址和端口配置。一般不需要改，只有端口冲突或外部接入时再调整。</p>
-              </header>
-              <div className="settings-form-group">
-                <label className="settings-input-group">
-                  <span className="settings-input-label">监听地址</span>
-                  <input
-                    className="settings-input-field"
-                    ref={registerFocusTarget("host") as (node: HTMLInputElement | null) => void}
-                    value={form.host}
-                    onChange={(e) => updateForm({ ...form, host: e.target.value })}
-                  />
-                  <span className="settings-input-caption">服务绑定的 IP 地址，默认为 127.0.0.1</span>
-                </label>
-                <label className="settings-input-group">
-                  <span className="settings-input-label">监听端口</span>
-                  <input
-                    className="settings-input-field"
-                    ref={registerFocusTarget("port") as (node: HTMLInputElement | null) => void}
-                    type="number"
-                    value={form.port}
-                    onChange={(e) => updateForm({ ...form, port: parseInt(e.target.value) || 3838 })}
-                  />
-                  <span className="settings-input-caption">服务端口号，默认 3838</span>
-                </label>
-              </div>
-            </section>
-          )}
-          {activeCategory === "maintenance" && (
-            <section className="settings-category-section">
-              <header className="settings-category-header">
-                <h2>界面重置</h2>
-                <p>重置首次使用引导等界面提示，方便再次查看。</p>
-              </header>
-              <div className="settings-form-group">
-                <div className="settings-reset-row">
-                  <div className="settings-reset-row-copy">
-                    <span className="settings-input-label">首页引导</span>
-                    <span className="settings-input-caption">清空「首次进入首页」的引导记录，下次进入首页时会重新显示功能指引。</span>
-                  </div>
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    onClick={() => {
-                      window.localStorage.removeItem("bilisum.homeTourSeen");
-                      window.localStorage.removeItem("bilisum.summaryPreferenceHintSeen");
-                      setSaveStatus("已清空首页引导记录，下次进入首页将重新显示。");
-                    }}
-                  >
-                    重新显示
-                  </button>
-                </div>
-                <div className="settings-reset-row">
-                  <div className="settings-reset-row-copy">
-                    <span className="settings-input-label">配置引导</span>
-                    <span className="settings-input-caption">重新打开首次配置引导助手，可逐步补全运行所需配置。</span>
-                  </div>
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    onClick={() => {
-                      onOpenSetupAssistant();
-                      setSaveStatus("已打开配置引导。");
-                    }}
-                  >
-                    打开配置引导
-                  </button>
-                </div>
-              </div>
-            </section>
-          )}
+          
 
           {activeCategory === "files" && (
             <section className="settings-category-section">
@@ -3628,7 +3606,7 @@ export function SettingsPage({
                   </div>
                   <div className="setting-row">
                     <span className="setting-label">运行环境状态</span>
-                    <span className="setting-value">{environment?.runtimeReady === false ? "未就绪" : "已就绪"}</span>
+                    <span className="setting-value">{environment?.runtimeReady ? "已就绪" : environment?.runtimeError ? "异常" : "检测中..."}</span>
                   </div>
                 </div>
                 <span className="input-label">CUDA 目标版本</span>
@@ -3741,14 +3719,16 @@ export function SettingsPage({
                   >
                     {runtimeStatusLoading ? "检查中..." : "检查所有 runtime"}
                   </button>
-                  <button
-                    className="primary-button compact"
-                    type="button"
-                    disabled={runtimeSyncing || runtimeStatusLoading || outdatedRuntimeChannels.length === 0}
-                    onClick={() => void syncRuntimeChannels()}
-                  >
-                    {runtimeSyncing ? "同步中..." : "同步需要更新的 runtime"}
-                  </button>
+                  {outdatedRuntimeChannels.length > 0 && (
+                    <button
+                      className="primary-button compact"
+                      type="button"
+                      disabled={runtimeSyncing || runtimeStatusLoading}
+                      onClick={() => void syncRuntimeChannels()}
+                    >
+                      {runtimeSyncing ? "同步中..." : "同步需要更新的 runtime"}
+                    </button>
+                  )}
                 </div>
                 {runtimeStatusMessage ? (
                   <p className="settings-input-caption" style={{ marginTop: 8 }}>{runtimeStatusMessage}</p>
@@ -3828,66 +3808,180 @@ export function SettingsPage({
             <section className="settings-category-section">
               <header className="settings-category-header">
                 <h2>日志与控制</h2>
-                <p>查看后端日志并控制服务。</p>
+                <p>查看服务日志、管理后端进程、配置桌面行为与监听参数。</p>
               </header>
-              <div className="control-status-row" ref={registerFocusTarget("service_logs") as (node: HTMLDivElement | null) => void}>
-                <span className={`helper-chip ${serviceOnline ? "status-success" : "status-failed"}`}>{serviceOnline ? "服务在线" : "服务离线"}</span>
-                <span className={`helper-chip ${backendRunning ? (backendReady ? "status-success" : "status-running") : "status-pending"}`}>
-                  {backendRunning ? (backendReady ? "内置后端运行中" : "内置后端启动中") : "内置后端未运行"}
-                </span>
-                {desktop.backend?.pid ? <span className="helper-chip">PID {desktop.backend.pid}</span> : null}
+
+              {/* ═══════ 服务状态 ═══════ */}
+              <div className="settings-cuda-section">
+                <h3 className="settings-cuda-title">服务状态</h3>
+                <div className="control-status-row" ref={registerFocusTarget("service_logs") as (node: HTMLDivElement | null) => void}>
+                  <span className={`helper-chip ${serviceOnline ? "status-success" : backendRunning ? "status-running" : "status-failed"}`}>{serviceOnline ? "服务在线" : backendRunning ? "启动中..." : "服务离线"}</span>
+                  <span className={`helper-chip ${backendRunning ? (backendReady ? "status-success" : "status-running") : "status-pending"}`}>
+                    {backendRunning ? (backendReady ? "内置后端运行中" : "内置后端启动中") : "内置后端未运行"}
+                  </span>
+                  {desktop.backend?.pid ? <span className="helper-chip">PID {desktop.backend.pid}</span> : null}
+                </div>
+                <div className="cuda-insight-grid">
+                  <div className="setting-row"><span className="setting-label">服务名</span><span className="setting-value">{snapshot.systemInfo?.application?.name || "-"}</span></div>
+                  <div className="setting-row"><span className="setting-label">版本</span><span className="setting-value">{snapshot.systemInfo?.application?.version || "-"}</span></div>
+                  <div className="setting-row"><span className="setting-label">日志文件</span><span className="setting-value" style={{ fontSize: "0.82rem", wordBreak: "break-all", overflowWrap: "anywhere" }}>{effectiveLogPath}</span></div>
+                </div>
               </div>
-              <div className="setting-list">
-                <div className="setting-row"><span className="setting-label">服务名</span><span className="setting-value">{snapshot.systemInfo?.application?.name || "-"}</span></div>
-                <div className="setting-row"><span className="setting-label">版本</span><span className="setting-value">{snapshot.systemInfo?.application?.version || "-"}</span></div>
-                <div className="setting-row"><span className="setting-label">日志文件</span><span className="setting-value">{effectiveLogPath}</span></div>
-              </div>
-              <div className="desktop-actions">
-                <button className="secondary-button" type="button" onClick={() => void refreshLogs()}>刷新日志</button>
-                <button
-                  className={backendRunning ? "secondary-button danger-button" : "primary-button"}
-                  type="button"
-                  onClick={async () => {
-                    if (backendRunning) {
+
+              {/* ═══════ 服务管理 ═══════ */}
+              <div className="settings-cuda-section">
+                <h3 className="settings-cuda-title">服务管理</h3>
+                <div className="settings-form-group">
+                  <label className="settings-input-group">
+                    <span className="settings-input-label">监听地址</span>
+                    <input
+                      className="settings-input-field"
+                      ref={registerFocusTarget("host") as (node: HTMLInputElement | null) => void}
+                      value={form.host}
+                      onChange={(e) => updateForm({ ...form, host: e.target.value })}
+                    />
+                    <span className="settings-input-caption">服务绑定的 IP 地址，默认 127.0.0.1。</span>
+                  </label>
+                  <label className="settings-input-group">
+                    <span className="settings-input-label">监听端口</span>
+                    <input
+                      className="settings-input-field"
+                      ref={registerFocusTarget("port") as (node: HTMLInputElement | null) => void}
+                      type="number"
+                      value={form.port}
+                      onChange={(e) => updateForm({ ...form, port: parseInt(e.target.value) || 3838 })}
+                    />
+                    <span className="settings-input-caption">服务端口号，默认 3838。只有端口冲突或外部接入时再调整。</span>
+                  </label>
+                </div>
+                <div className="desktop-actions">
+                  <button
+                    className={backendRunning ? "secondary-button danger-button" : "primary-button"}
+                    type="button"
+                    onClick={async () => {
+                      if (backendRunning) {
+                        await window.desktop?.backend.stop();
+                        setServiceStatus("内置后端已停止");
+                      } else {
+                        await window.desktop?.backend.start();
+                        setServiceStatus("已请求启动内置后端");
+                      }
+                      onRefresh();
+                      await refreshLogs();
+                    }}
+                  >
+                    {backendRunning ? "停止内置后端" : "启动内置后端"}
+                  </button>
+                  {backendRunning && (
+                    <button className="secondary-button" type="button" onClick={async () => {
+                      setServiceStatus("正在重启内置后端...");
                       await window.desktop?.backend.stop();
-                      setServiceStatus("内置后端已停止");
-                    } else {
+                      await new Promise((r) => setTimeout(r, 1500));
                       await window.desktop?.backend.start();
-                      setServiceStatus("已请求启动内置后端");
-                    }
-                    onRefresh();
-                    await refreshLogs();
-                  }}
-                >
-                  {backendRunning ? "停止内置后端" : "启动内置后端"}
-                </button>
-                <button
-                  className="secondary-button"
-                  type="button"
-                  onClick={async () => {
-                    await window.desktop?.shell.openPath(effectiveLogPath);
-                  }}
-                >
-                  打开日志文件
-                </button>
-                <button
-                  className="secondary-button danger-button"
-                  type="button"
-                  disabled={!serviceOnline}
-                  onClick={async () => {
-                    await api.shutdownService();
-                    setServiceStatus("已向服务发送关闭请求");
-                    onRefresh();
-                    await refreshLogs();
-                  }}
-                >
-                  强制关闭服务
-                </button>
+                      setServiceStatus("内置后端已重启");
+                      onRefresh();
+                      await refreshLogs();
+                    }}>重启后端</button>
+                  )}
+                  <button
+                    className="secondary-button danger-button"
+                    type="button"
+                    disabled={!serviceOnline}
+                    onClick={async () => {
+                      await api.shutdownService();
+                      setServiceStatus("已向服务发送关闭请求");
+                      onRefresh();
+                      await refreshLogs();
+                    }}
+                  >
+                    强制关闭服务
+                  </button>
+                </div>
               </div>
-              <label className="input-row">
-                <span className="input-label">最近日志</span>
-                <textarea className="textarea-field log-viewer" rows={20} readOnly value={logOutput}></textarea>
-              </label>
+
+              {/* ═══════ 桌面偏好 ═══════ */}
+              <div className="settings-cuda-section">
+                <h3 className="settings-cuda-title">桌面偏好</h3>
+                <div className="settings-form-group">
+                  <div className="settings-input-group">
+                    <div className="settings-toggle-row">
+                      <div className="settings-toggle-label">
+                        <span className="settings-toggle-title">开机自启动</span>
+                        <span className="settings-toggle-caption">系统启动时自动运行 BiliSum。</span>
+                      </div>
+                      <label className="toggle-switch"><input type="checkbox" checked={autoLaunchEnabled} onChange={async (e) => { const v = e.target.checked; const result = await window.desktop?.app?.setAutoLaunch(v); if (typeof result === "boolean") { setAutoLaunchEnabled(result); if (result !== v) { setSaveStatus(`开机自启动${v ? "开启" : "关闭"}失败，请检查系统权限`); } } }} /><span className="toggle-slider" /></label>
+                    </div>
+                  </div>
+                  <div className="settings-input-group">
+                    <div className="settings-toggle-row">
+                      <div className="settings-toggle-label">
+                        <span className="settings-toggle-title">开机静默启动</span>
+                        <span className="settings-toggle-caption">开机自启时隐藏窗口，仅显示托盘图标。</span>
+                      </div>
+                      <label className="toggle-switch"><input type="checkbox" checked={silentStartEnabled} disabled={!autoLaunchEnabled} onChange={async (e) => { const v = e.target.checked; setSilentStartEnabled(v); await window.desktop?.preferences?.setSilentStart(v); }} /><span className="toggle-slider" /></label>
+                    </div>
+                  </div>
+                  <div className="settings-input-group">
+                    <div className="settings-toggle-row">
+                      <div className="settings-toggle-label">
+                        <span className="settings-toggle-title">崩溃自动重启</span>
+                        <span className="settings-toggle-caption">后端服务非预期退出时自动拉起。</span>
+                      </div>
+                      <label className="toggle-switch"><input type="checkbox" checked={crashAutoRestart} onChange={async (e) => { const v = e.target.checked; setCrashAutoRestart(v); await window.desktop?.preferences?.setCrashAutoRestart(v); }} /><span className="toggle-slider" /></label>
+                    </div>
+                  </div>
+                  <label className="settings-input-group">
+                    <span className="settings-input-label">关闭窗口行为</span>
+                    <select className="settings-select-field" style={{ maxWidth: 200 }} value={closeBehavior} onChange={async (e) => { const v = e.target.value as "tray" | "exit"; setCloseBehavior(v); await window.desktop?.preferences?.setCloseBehavior(v); }}>
+                      <option value="tray">最小化到托盘</option>
+                      <option value="exit">直接退出应用</option>
+                    </select>
+                    <span className="settings-input-caption">点击窗口关闭按钮时的行为。</span>
+                  </label>
+                </div>
+                <div className="settings-reset-row">
+                  <div className="settings-reset-row-copy">
+                    <span className="settings-input-label">首页引导</span>
+                    <span className="settings-input-caption">重新显示首次进入首页的功能指引。</span>
+                  </div>
+                  <button className="secondary-button" type="button" onClick={() => { window.localStorage.removeItem("bilisum.homeTourSeen"); window.localStorage.removeItem("bilisum.summaryPreferenceHintSeen"); setSaveStatus("已清空首页引导记录。"); }}>重新显示</button>
+                </div>
+                <div className="settings-reset-row">
+                  <div className="settings-reset-row-copy">
+                    <span className="settings-input-label">配置引导</span>
+                    <span className="settings-input-caption">重新打开首次配置引导助手。</span>
+                  </div>
+                  <button className="secondary-button" type="button" onClick={() => { onOpenSetupAssistant(); setSaveStatus("已打开配置引导。"); }}>打开配置引导</button>
+                </div>
+              </div>
+
+              {/* ═══════ 日志 ═══════ */}
+              <div className="settings-cuda-section">
+                <h3 className="settings-cuda-title">日志</h3>
+                <div className="settings-input-group" style={{ marginBottom: 12 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      {(["all", "ERROR", "WARNING", "INFO"] as const).map((level) => (
+                        <button key={level} type="button" className={`filter-pill${logLevelFilter === level ? " active" : ""}`} onClick={() => setLogLevelFilter(level)}>
+                          {level === "all" ? "全部" : level}
+                        </button>
+                      ))}
+                    </div>
+                    <div style={{ flex: 1 }} />
+                    <div className="settings-toggle-row" style={{ gap: 8 }}>
+                      <span className="settings-toggle-caption">自动刷新</span>
+                      <label className="toggle-switch"><input type="checkbox" checked={logAutoRefresh} onChange={(e) => setLogAutoRefresh(e.target.checked)} /><span className="toggle-slider" /></label>
+                    </div>
+                  </div>
+                </div>
+                <textarea ref={logTextareaRef} className="textarea-field log-viewer" rows={22} readOnly value={filteredLogOutput || "暂无日志"}></textarea>
+                <div className="desktop-actions" style={{ marginTop: 12 }}>
+                  <button className="secondary-button" type="button" onClick={() => void refreshLogs()}>刷新日志</button>
+                  <button className="secondary-button" type="button" onClick={async () => { await window.desktop?.shell.openPath(effectiveLogPath); }}>打开日志文件</button>
+                  <button className="secondary-button" type="button" onClick={async () => { const p = await (window.desktop as any)?.logs?.exportLog?.(); if (p) setServiceStatus(`日志已导出到 ${p}`); }}>导出日志</button>
+                  <button className="secondary-button danger-button" type="button" onClick={async () => { await (window.desktop as any)?.logs?.clearLog?.(); await refreshLogs(); setServiceStatus("日志已清空"); }}>清空日志</button>
+                </div>
+              </div>
             </section>
           )}
 

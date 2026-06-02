@@ -13,7 +13,7 @@ import {
   TerminalIcon,
 } from "../components/AppIcons";
 
-export type SettingsCategory = "overview" | "video" | "transcription" | "generation" | "knowledge" | "files" | "performance" | "prompts" | "maintenance" | "runtime" | "updates" | "logs";
+export type SettingsCategory = "overview" | "video" | "transcription" | "generation" | "knowledge" | "files" | "performance" | "prompts" | "runtime" | "updates" | "logs";
 export type SettingsCategoryGroup = "workflow" | "system";
 
 export const settingsCategories: Array<{
@@ -31,8 +31,7 @@ export const settingsCategories: Array<{
   { id: "files", label: "输出与文件", description: "输出目录、数据目录和空间清理。", group: "workflow", icon: <FolderIcon /> },
   { id: "performance", label: "性能与资源", description: "并发、CUDA 版本和运行环境通道。", group: "system", icon: <SlidersIcon /> },
   { id: "prompts", label: "提示词", description: "知识笔记、摘要和导图的高级文本模板。", group: "system", icon: <FileTextIcon /> },
-  { id: "maintenance", label: "维护与诊断", description: "服务地址、端口和配置维护入口。", group: "system", icon: <SettingsIcon /> },
   { id: "runtime", label: "运行环境", description: "检查并维护 Python、Torch、CUDA、ASR 与扩展依赖。", group: "system", icon: <MonitorIcon /> },
   { id: "updates", label: "应用更新", description: "检查桌面应用新版本并管理安装。", group: "system", icon: <SettingsIcon /> },
-  { id: "logs", label: "日志与控制", description: "查看服务日志并控制后端进程。", group: "system", icon: <TerminalIcon /> },
+  { id: "logs", label: "日志与控制", description: "查看服务日志、管理后端进程与桌面行为。", group: "system", icon: <TerminalIcon /> },
 ];

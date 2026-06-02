@@ -308,9 +308,32 @@
 ### 5.9 设置页组件
 
 - 设置导航项要能同时承载标题与一句解释性描述。
-- 设置页 Hero 负责说明“当前设置模块的目的”，不要堆按钮。
+- 设置页 Hero 负责说明”当前设置模块的目的”，不要堆按钮。
 - 表单分组必须有清晰标题和简短说明。
 - 环境、日志、CUDA 等技术信息必须保持卡片化与分组化，避免裸列表。
+
+#### 5.9.1 开关组件 (Toggle Switch)
+
+- HTML 结构：`.toggle-switch > input[type=”checkbox”] + .toggle-slider`
+- 容器宽度 `42px`，高度 `24px`，圆角 `24px`（胶囊形）
+- 关闭态：`background: var(--border-strong)`
+- 开启态：`background: var(--brand-500, #fb7299)`
+- 滑块：白色 `18px × 18px` 圆形，带 `box-shadow`，开启时 `translateX(18px)`
+- 过渡使用 `var(--transition-base)`，时长约 200ms
+- disabled 态整体 `opacity: 0.4; cursor: not-allowed`
+- 每行开关需搭配 `.settings-toggle-row` 容器，左侧放 `.settings-toggle-label`（标题 + 说明），右侧放 `.toggle-switch`
+- 深色主题下 `--brand-500` 值保持一致，滑块仍为白色，`--border-strong` 适配暗色
+
+**CSS 参照：**
+```css
+.toggle-switch { position: relative; width: 42px; height: 24px; flex-shrink: 0; }
+.toggle-switch input { opacity: 0; width: 0; height: 0; }
+.toggle-slider { position: absolute; inset: 0; border-radius: 24px; background: var(--border-strong); cursor: pointer; transition: background var(--transition-base); }
+.toggle-slider::before { content: “”; position: absolute; width: 18px; height: 18px; left: 3px; top: 3px; border-radius: 50%; background: #fff; transition: transform var(--transition-base); box-shadow: 0 1px 3px rgba(0,0,0,.15); }
+.toggle-switch input:checked + .toggle-slider { background: var(--brand-500, #fb7299); }
+.toggle-switch input:checked + .toggle-slider::before { transform: translateX(18px); }
+.toggle-switch input:disabled + .toggle-slider { opacity: .4; cursor: not-allowed; }
+```
 
 ### 5.10 进度、时间线与任务反馈
 
@@ -397,6 +420,10 @@
   - `.primary-button`
   - `.secondary-button`
   - `.settings-nav-item`
+  - `.settings-toggle-row`
+  - `.settings-toggle-label`
+  - `.toggle-switch`
+  - `.toggle-slider`
   - `.update-dialog`
 
 ### 9.4 内联样式边界
