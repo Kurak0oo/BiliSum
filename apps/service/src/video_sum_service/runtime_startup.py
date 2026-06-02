@@ -237,13 +237,21 @@ def start_runtime_startup(
 ) -> Thread:
     def run() -> None:
         try:
-            task_worker = build_worker(
-                repository=repository,
-                current_settings=current_settings,
-            )
+            # Update status so the UI shows what's happening during the
+            # potentially slow first environment probe after an update.
+            with app_state.runtime_startup_lock:
+                app_state.runtime_startup["message"] = "正在检测运行环境（首次可能较慢，需导入 torch 等依赖）..."
             environment = detect_environment(current_settings.runtime_channel)
             if not environment.get("runtimeReady"):
                 raise RuntimeError(str(environment.get("runtimeError") or "Runtime environment is not ready."))
+
+            with app_state.runtime_startup_lock:
+                app_state.runtime_startup["message"] = "正在构建任务处理器..."
+            task_worker = build_worker(
+                repository=repository,
+                current_settings=current_settings,
+                environment_info=environment,
+            )
             if runtime_startup_shutdown_requested(app_state):
                 task_worker.shutdown(wait=True, timeout=5)
                 logger.info("runtime startup skipped because application is shutting down")
