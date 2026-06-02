@@ -1304,7 +1304,9 @@ def detect_environment(runtime_channel: str | None = None) -> dict[str, object]:
         return dict(cached)
 
     if uses_current_service_python(active_channel):
-        python_executable = Path(sys.executable).resolve()
+        # Do NOT .resolve() sys.executable — in uv venvs the symlink
+        # target is the bare CPython interpreter without site-packages.
+        python_executable = Path(sys.executable)
         probe_runner = lambda command, timeout=120: run_host_command(command, timeout=timeout)
     else:
         python_executable = runtime_python_executable(active_channel)
@@ -1949,7 +1951,7 @@ def install_knowledge_dependencies(
     use_current_python = uses_current_service_python(runtime_channel)
     if use_current_python:
         runtime_dir = repo_root()
-        python_executable = Path(sys.executable).resolve()
+        python_executable = Path(sys.executable)
         runner = lambda command, runtime_channel, timeout=1800: run_host_command(command, timeout=timeout)
     else:
         runtime_dir = ensure_runtime_channel(runtime_channel)
