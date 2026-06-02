@@ -3631,9 +3631,8 @@ export function SettingsPage({
                     <span className="setting-value">{environment?.runtimeReady === false ? "未就绪" : "已就绪"}</span>
                   </div>
                 </div>
+                <span className="input-label">CUDA 目标版本</span>
                 <div className="settings-actions cuda-button-row">
-                  <label className="input-row cuda-picker">
-                    <span className="input-label">CUDA 目标版本</span>
                     <select
                       className="select-field cuda-select-field"
                       value={form.cuda_variant}
@@ -3644,7 +3643,6 @@ export function SettingsPage({
                       <option value="cu126">CUDA 12.6</option>
                       <option value="cu124">CUDA 12.4</option>
                     </select>
-                  </label>
                   <button
                     className="secondary-button"
                     type="button"

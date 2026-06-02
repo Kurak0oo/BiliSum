@@ -2117,6 +2117,8 @@
 }
 
 .cuda-select-field {
+  flex: 1;
+  min-width: 160px;
   background-image: none;
   padding-right: 42px;
 }
