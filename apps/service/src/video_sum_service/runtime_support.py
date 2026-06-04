@@ -810,7 +810,9 @@ def _ensure_runtime_sitecustomize(runtime_channel: str) -> None:
     ``FileNotFoundError: WinError 206`` on portable CPython builds.
     Swallowing this error is safe — the directory is already on PATH.
     """
-    if not is_frozen():
+    if not is_frozen() and uses_current_service_python(runtime_channel):
+        # In dev mode with "base" channel, everything runs in the host
+        # Python — no managed runtime subprocess, no portable Python issue.
         return
     site_packages = runtime_site_packages_dir(runtime_channel)
     site_packages.mkdir(parents=True, exist_ok=True)
