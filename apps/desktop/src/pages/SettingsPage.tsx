@@ -180,8 +180,7 @@ const SETTINGS_SEARCH_ITEMS: SettingsSearchItem[] = [
   { category: "generation", targetKey: "llm_model", title: "LLM 模型名称", description: "主摘要使用的模型名。", keywords: ["model", "模型", "gpt", "qwen", "mimo", "claude"] },
   { category: "knowledge", targetKey: "knowledge_enabled", title: "启用知识库", description: "开启知识库索引和问答能力。", keywords: ["知识库", "knowledge", "rag", "索引", "问答"] },
   { category: "knowledge", targetKey: "knowledge_dependencies", title: "知识库依赖", description: "安装和检查知识库扩展依赖。", keywords: ["依赖", "安装", "runtime", "faiss", "向量"] },
-  { category: "knowledge", targetKey: "knowledge_embedding_model", title: "Embedding 模型", description: "向量化模型名，支持 HuggingFace/ModelScope 路径。", keywords: ["embedding", "bge", "向量", "模型", "modelscope"] },
-  { category: "knowledge", targetKey: "hf_endpoint", title: "HuggingFace 镜像", description: "HuggingFace 下载镜像地址，留空使用官方源。如 https://hf-mirror.com", keywords: ["huggingface", "hf", "镜像", "mirror", "endpoint"] },
+  { category: "knowledge", targetKey: "knowledge_embedding_provider", title: "Embedding 模型来源", description: "选择向量模型的下载源：本地 HuggingFace（支持镜像）、本地 ModelScope 或在线 API。", keywords: ["embedding", "bge", "向量", "huggingface", "modelscope"] },
   { category: "knowledge", targetKey: "knowledge_llm_mode", title: "知识库 LLM 来源", description: "跟随主 LLM 或使用独立配置。", keywords: ["知识库", "llm", "来源", "独立配置"] },
   { category: "knowledge", targetKey: "knowledge_llm_provider", title: "知识库 LLM 提供商", description: "独立知识库 LLM 服务类型。", keywords: ["知识库", "provider", "openai", "anthropic", "提供商"] },
   { category: "knowledge", targetKey: "knowledge_llm_base_url", title: "知识库 API Base URL", description: "独立知识库 LLM API 地址。", keywords: ["知识库", "base url", "api", "openai"] },
@@ -2975,178 +2974,139 @@ export function SettingsPage({
           )}
 
           {activeCategory === "knowledge" && (
-            <section className="settings-category-section">
+            <section className="settings-category-section generation-settings-section">
               <header className="settings-category-header">
-                <h2>知识库</h2>
-                <p>知识库默认关闭，依赖按需安装到当前运行环境，不进入默认安装包。</p>
+                <h2>知识库与问答</h2>
+                <p>知识库默认关闭，依赖按需安装到当前运行环境。按"基础开关、向量模型、LLM 配置"分层管理。</p>
               </header>
-              <div className="settings-form-group">
-                <label className="settings-input-group" ref={registerFocusTarget("knowledge_enabled") as (node: HTMLLabelElement | null) => void}>
-                  <span className="settings-input-label">启用知识库</span>
-                  <select
-                    className="settings-select-field"
-                    value={form.knowledge_enabled ? "true" : "false"}
-                    onChange={(e) => updateForm({ ...form, knowledge_enabled: e.target.value === "true" })}
-                  >
-                    <option value="false">关闭</option>
-                    <option value="true">开启</option>
-                  </select>
-                  <span className="settings-input-caption">关闭时不会自动构建索引；标签管理仍可使用。</span>
-                </label>
-                <div
-                  className={`settings-inline-alert ${knowledgeDepsReady ? "success" : "warning"} settings-focus-target ${activeFocusTarget === "knowledge_dependencies" ? "is-highlighted" : ""}`}
-                  ref={registerFocusTarget("knowledge_dependencies_alert") as (node: HTMLDivElement | null) => void}
-                >
-                  <strong>{knowledgeDepsReady ? "知识库依赖已就绪" : "知识库依赖未安装"}</strong>
-                  <span>
-                    {knowledgeDepsReady
-                      ? `chromadb${environment?.chromadbVersion ? ` ${environment.chromadbVersion}` : ""} 与 sentence-transformers${environment?.sentenceTransformersVersion ? ` ${environment.sentenceTransformersVersion}` : ""} 已在当前运行环境可用。`
-                      : `默认安装包不包含知识库重依赖。将使用 ${pipIndexSummary} 源依次尝试安装 ${missingKnowledgeDeps.join("、") || "chromadb 与 sentence-transformers"}。`}
-                  </span>
-                </div>
-                <div className="settings-input-group">
-                  <span className="settings-input-label">知识库运行环境依赖</span>
-                  <div
-                    className={`settings-actions settings-focus-target ${activeFocusTarget === "knowledge_dependencies" ? "is-highlighted" : ""}`}
-                    ref={registerFocusTarget("knowledge_dependencies") as (node: HTMLDivElement | null) => void}
-                  >
-                    <button className="secondary-button" type="button" disabled={knowledgeDepsInstalling} onClick={() => void installKnowledgeDependencies()}>
-                      {knowledgeDepsInstalling ? "安装中..." : knowledgeDepsReady ? "重新安装知识库依赖" : "安装知识库依赖"}
-                    </button>
-                    <button
-                      className="secondary-button"
-                      type="button"
-                      disabled={runtimeStatusLoading}
-                      onClick={() => void refreshRuntimeStatus()}
-                    >
-                      {runtimeStatusLoading ? "检查中..." : "检查运行环境"}
-                    </button>
-                  </div>
-                  <span className="settings-input-caption">
-                    依赖只安装到当前 runtime，不会写入默认安装包；更新应用时已安装的 runtime 会保留。
-                  </span>
-                  {knowledgeDepsOutput ? (
-                    <textarea className="textarea-field log-viewer" rows={8} readOnly value={knowledgeDepsOutput}></textarea>
-                  ) : null}
-                </div>
-                <label className="settings-input-group">
-                  <span className="settings-input-label">自动维护知识库索引</span>
-                  <select
-                    className="settings-select-field"
-                    value={form.knowledge_index_auto_rebuild || "disabled"}
-                    disabled={!form.knowledge_enabled}
-                    onChange={(e) => updateForm({ ...form, knowledge_index_auto_rebuild: e.target.value })}
-                  >
-                    <option value="disabled">关闭自动维护</option>
-                    <option value="on_task_completed">视频生成结束后更新索引</option>
-                  </select>
-                  <span className="settings-input-caption">开启知识库并安装依赖后，才会在任务完成时自动刷新索引。</span>
-                </label>
-                <div className="settings-inline-alert info">
-                  <strong>知识库 LLM</strong>
-                  <span>自动打标和知识库问答可以跟随主 LLM，也可以使用独立配置；不再限制为本地地址。</span>
-                </div>
-                <label
-                  className={`settings-input-group settings-focus-target ${activeFocusTarget === "knowledge_llm_mode" ? "is-highlighted" : ""}`}
-                  ref={registerFocusTarget("knowledge_llm_mode") as (node: HTMLLabelElement | null) => void}
-                >
-                  <span className="settings-input-label">知识库 LLM 来源</span>
-                  <select
-                    className="settings-select-field"
-                    value={form.knowledge_llm_mode || "same_as_main"}
-                    disabled={!form.knowledge_enabled}
-                    onChange={(e) => updateForm({ ...form, knowledge_llm_mode: e.target.value })}
-                  >
-                    <option value="same_as_main">跟随主 LLM</option>
-                    <option value="custom">使用独立配置</option>
-                  </select>
-                  <span className="settings-input-caption">"跟随主 LLM"会直接复用摘要 LLM 的 Base URL、API Key 与模型名。</span>
-                </label>
-                {knowledgeLlmUsesCustom ? (
-                  <>
-                    <label
-                      className={`settings-input-group settings-focus-target ${activeFocusTarget === "knowledge_llm_enabled" ? "is-highlighted" : ""}`}
-                      ref={registerFocusTarget("knowledge_llm_enabled") as (node: HTMLLabelElement | null) => void}
-                    >
-                      <span className="settings-input-label">启用知识库 LLM</span>
+              <div className="generation-settings-tree">
+                <section className="settings-tree-panel">
+                  <header className="settings-tree-panel-header">
+                    <span className="settings-tree-index">01</span>
+                    <div>
+                      <h3>基础开关</h3>
+                      <p>控制知识库启停、索引策略和依赖安装。</p>
+                    </div>
+                  </header>
+                  <div className="settings-tree-grid">
+                    <label className="settings-input-group" ref={registerFocusTarget("knowledge_enabled") as (node: HTMLLabelElement | null) => void}>
+                      <span className="settings-input-label">启用知识库</span>
                       <select
                         className="settings-select-field"
-                        value={form.knowledge_llm_enabled ? "true" : "false"}
-                        disabled={!form.knowledge_enabled}
-                        onChange={(e) => updateForm({ ...form, knowledge_llm_enabled: e.target.value === "true" })}
+                        value={form.knowledge_enabled ? "true" : "false"}
+                        onChange={(e) => updateForm({ ...form, knowledge_enabled: e.target.value === "true" })}
                       >
                         <option value="false">关闭</option>
                         <option value="true">开启</option>
                       </select>
+                      <span className="settings-input-caption">关闭时不会自动构建索引；标签管理仍可使用。</span>
                     </label>
-                    {form.knowledge_llm_enabled ? (
+                    <label className="settings-input-group">
+                      <span className="settings-input-label">自动维护知识库索引</span>
+                      <select
+                        className="settings-select-field"
+                        value={form.knowledge_index_auto_rebuild || "disabled"}
+                        disabled={!form.knowledge_enabled}
+                        onChange={(e) => updateForm({ ...form, knowledge_index_auto_rebuild: e.target.value })}
+                      >
+                        <option value="disabled">关闭自动维护</option>
+                        <option value="on_task_completed">视频生成结束后更新索引</option>
+                      </select>
+                      <span className="settings-input-caption">开启知识库并安装依赖后，才会在任务完成时自动刷新索引。</span>
+                    </label>
+                  </div>
+                </section>
+
+                <section className="settings-tree-panel">
+                  <header className="settings-tree-panel-header">
+                    <span className="settings-tree-index">02</span>
+                    <div>
+                      <h3>运行依赖</h3>
+                      <p>知识库依赖（chromadb、sentence-transformers）按需安装，不会随应用更新被覆盖。</p>
+                    </div>
+                  </header>
+                  <div className="settings-tree-grid">
+                    <div
+                      className={`settings-inline-alert ${knowledgeDepsReady ? "success" : "warning"} settings-focus-target ${activeFocusTarget === "knowledge_dependencies" ? "is-highlighted" : ""}`}
+                      ref={registerFocusTarget("knowledge_dependencies_alert") as (node: HTMLDivElement | null) => void}
+                    >
+                      <strong>{knowledgeDepsReady ? "知识库依赖已就绪" : "知识库依赖未安装"}</strong>
+                      <span>
+                        {knowledgeDepsReady
+                          ? `chromadb${environment?.chromadbVersion ? ` ${environment.chromadbVersion}` : ""} 与 sentence-transformers${environment?.sentenceTransformersVersion ? ` ${environment.sentenceTransformersVersion}` : ""} 已在当前运行环境可用。`
+                          : `默认安装包不包含知识库重依赖。将使用 ${pipIndexSummary} 源依次尝试安装 ${missingKnowledgeDeps.join("、") || "chromadb 与 sentence-transformers"}。`}
+                      </span>
+                    </div>
+                    <label className="settings-input-group">
+                      <span className="settings-input-label">运行环境依赖</span>
+                      <div
+                        className={`settings-actions settings-focus-target ${activeFocusTarget === "knowledge_dependencies" ? "is-highlighted" : ""}`}
+                        ref={registerFocusTarget("knowledge_dependencies") as (node: HTMLDivElement | null) => void}
+                      >
+                        <button className="secondary-button" type="button" disabled={knowledgeDepsInstalling} onClick={() => void installKnowledgeDependencies()}>
+                          {knowledgeDepsInstalling ? "安装中..." : knowledgeDepsReady ? "重新安装知识库依赖" : "安装知识库依赖"}
+                        </button>
+                        <button className="secondary-button" type="button" disabled={runtimeStatusLoading} onClick={() => void refreshRuntimeStatus()}>
+                          {runtimeStatusLoading ? "检查中..." : "检查运行环境"}
+                        </button>
+                      </div>
+                      <span className="settings-input-caption">
+                        依赖只安装到当前 runtime，不会写入默认安装包；更新应用时已安装的 runtime 会保留。
+                      </span>
+                      {knowledgeDepsOutput ? (
+                        <textarea className="textarea-field log-viewer" rows={8} readOnly value={knowledgeDepsOutput}></textarea>
+                      ) : null}
+                    </label>
+                  </div>
+                </section>
+
+                <section className="settings-tree-panel">
+                  <header className="settings-tree-panel-header">
+                    <span className="settings-tree-index">02</span>
+                    <div>
+                      <h3>向量模型</h3>
+                      <p>选择 Embedding 模型的下载源和模型名。国内用户建议使用 ModelScope 源或 HuggingFace 镜像。</p>
+                    </div>
+                  </header>
+                  <div className="settings-tree-grid">
+                    <label
+                      className={`settings-input-group settings-focus-target ${activeFocusTarget === "knowledge_embedding_provider" ? "is-highlighted" : ""}`}
+                      ref={registerFocusTarget("knowledge_embedding_provider") as (node: HTMLLabelElement | null) => void}
+                    >
+                      <span className="settings-input-label">模型来源</span>
+                      <select
+                        className="settings-select-field"
+                        value={form.knowledge_embedding_provider || "local_huggingface"}
+                        disabled={!form.knowledge_enabled}
+                        onChange={(e) => updateForm({ ...form, knowledge_embedding_provider: e.target.value })}
+                      >
+                        <option value="local_huggingface">本地 HuggingFace</option>
+                        <option value="local_modelscope">本地 ModelScope</option>
+                        <option value="online" disabled>在线 API（暂不可用）</option>
+                      </select>
+                      <span className="settings-input-caption">向量模型从哪个源下载和加载。</span>
+                    </label>
+                    {form.knowledge_embedding_provider === "local_huggingface" ? (
                       <>
                         <label
-                          className={`settings-input-group settings-focus-target ${activeFocusTarget === "knowledge_llm_provider" ? "is-highlighted" : ""}`}
-                          ref={registerFocusTarget("knowledge_llm_provider") as (node: HTMLLabelElement | null) => void}
+                          className={`settings-input-group settings-focus-target ${activeFocusTarget === "hf_endpoint" ? "is-highlighted" : ""}`}
+                          ref={registerFocusTarget("hf_endpoint") as (node: HTMLLabelElement | null) => void}
                         >
-                          <span className="settings-input-label">LLM 提供商</span>
-                          <select
-                            className="settings-select-field"
-                            value={form.knowledge_llm_provider || "openai-compatible"}
-                            disabled={!form.knowledge_enabled}
-                            onChange={(e) => updateForm({ ...form, knowledge_llm_provider: e.target.value })}
-                          >
-                            <option value="openai-compatible">OpenAI Compatible</option>
-                            <option value="openai">OpenAI</option>
-                            <option value="anthropic">Anthropic</option>
-                            <option value="custom">自建端点</option>
-                          </select>
-                        </label>
-                        <label
-                          className={`settings-input-group settings-focus-target ${activeFocusTarget === "knowledge_llm_base_url" ? "is-highlighted" : ""}`}
-                          ref={registerFocusTarget("knowledge_llm_base_url") as (node: HTMLLabelElement | null) => void}
-                        >
-                          <span className="settings-input-label">API Base URL</span>
+                          <span className="settings-input-label">HuggingFace 镜像地址</span>
                           <input
                             className="settings-input-field"
-                            value={form.knowledge_llm_base_url}
+                            value={form.hf_endpoint}
                             disabled={!form.knowledge_enabled}
-                            onChange={(e) => updateForm({ ...form, knowledge_llm_base_url: e.target.value })}
-                            placeholder="https://api.openai.com/v1"
+                            onChange={(e) => updateForm({ ...form, hf_endpoint: e.target.value })}
+                            placeholder="留空使用官方源，或填 https://hf-mirror.com"
                           />
-                          <span className="settings-input-caption">知识库问答与自动打标 LLM API 的基础 URL 地址。</span>
-                        </label>
-                        <label
-                          className={`settings-input-group settings-focus-target ${activeFocusTarget === "knowledge_llm_api_key" ? "is-highlighted" : ""}`}
-                          ref={registerFocusTarget("knowledge_llm_api_key") as (node: HTMLLabelElement | null) => void}
-                        >
-                          <span className="settings-input-label">API Key</span>
-                          <input
-                            className="settings-input-field"
-                            type="password"
-                            value={form.knowledge_llm_api_key}
-                            disabled={!form.knowledge_enabled}
-                            onFocus={selectMaskedApiKey}
-                            onChange={(e) => updateForm({ ...form, knowledge_llm_api_key: e.target.value })}
-                            placeholder="sk-..."
-                          />
-                          <span className="settings-input-caption">知识库 LLM 服务的 API 密钥。</span>
-                        </label>
-                        <label
-                          className={`settings-input-group settings-focus-target ${activeFocusTarget === "knowledge_llm_model" ? "is-highlighted" : ""}`}
-                          ref={registerFocusTarget("knowledge_llm_model") as (node: HTMLLabelElement | null) => void}
-                        >
-                          <span className="settings-input-label">模型名称</span>
-                          <input
-                            className="settings-input-field"
-                            value={form.knowledge_llm_model}
-                            disabled={!form.knowledge_enabled}
-                            onChange={(e) => updateForm({ ...form, knowledge_llm_model: e.target.value })}
-                            placeholder="gpt-4o-mini / claude-3-haiku"
-                          />
-                          <span className="settings-input-caption">要用于知识库问答和自动打标的 LLM 模型名称。</span>
+                          <span className="settings-input-caption">国内用户建议填写 https://hf-mirror.com 加速下载。</span>
                         </label>
                         <label
                           className={`settings-input-group settings-focus-target ${activeFocusTarget === "knowledge_embedding_model" ? "is-highlighted" : ""}`}
                           ref={registerFocusTarget("knowledge_embedding_model") as (node: HTMLLabelElement | null) => void}
                         >
-                          <span className="settings-input-label">Embedding 模型</span>
+                          <span className="settings-input-label">模型名称</span>
                           <input
                             className="settings-input-field"
                             value={form.knowledge_embedding_model}
@@ -3154,36 +3114,123 @@ export function SettingsPage({
                             onChange={(e) => updateForm({ ...form, knowledge_embedding_model: e.target.value })}
                             placeholder="BAAI/bge-small-zh-v1.5"
                           />
-                          <span className="settings-input-caption">文本向量化模型，支持 HuggingFace 或 ModelScope 路径。</span>
+                          <span className="settings-input-caption">HuggingFace 上的模型 ID，如 BAAI/bge-small-zh-v1.5。</span>
                         </label>
-                        <label
-                          className={`settings-input-group settings-focus-target ${activeFocusTarget === "hf_endpoint" ? "is-highlighted" : ""}`}
-                          ref={registerFocusTarget("hf_endpoint") as (node: HTMLLabelElement | null) => void}
-                        >
-                          <span className="settings-input-label">HuggingFace 镜像</span>
-                          <input
-                            className="settings-input-field"
-                            value={form.hf_endpoint}
-                            onChange={(e) => updateForm({ ...form, hf_endpoint: e.target.value })}
-                            placeholder="https://hf-mirror.com"
-                          />
-                          <span className="settings-input-caption">留空使用官方源，填入镜像地址则所有模型下载走该镜像。</span>
-                        </label>
-                        <div className="settings-inline-actions">
-                          <button className="secondary-button" type="button" disabled={llmTestBusy || !form.knowledge_enabled} onClick={() => void testKnowledgeLlmConnection()}>
-                            {llmTestBusy ? "测试中..." : "测试知识库 LLM"}
-                          </button>
-                          <span className="settings-input-caption">使用当前表单中的 Base URL、API Key 和模型名临时请求一次，并校验是否能返回合法 JSON，不会保存设置。</span>
-                        </div>
                       </>
-                    ) : null}
-                  </>
-                ) : (
-                  <div className={`settings-inline-alert ${knowledgeLlmReady ? "success" : "warning"}`}>
-                    <strong>{knowledgeLlmReady ? "知识库当前跟随主 LLM" : "知识库当前跟随主 LLM，但主 LLM 还未补全"}</strong>
-                    <span>{knowledgeLlmReady ? "自动打标和问答会直接复用主 LLM 配置。" : "请先启用主 LLM，并补全 API Key、Base URL 与模型名，或切换为独立配置。"}</span>
+                    ) : form.knowledge_embedding_provider === "local_modelscope" ? (
+                      <label
+                        className={`settings-input-group settings-focus-target ${activeFocusTarget === "knowledge_embedding_model" ? "is-highlighted" : ""}`}
+                        ref={registerFocusTarget("knowledge_embedding_model") as (node: HTMLLabelElement | null) => void}
+                      >
+                        <span className="settings-input-label">模型名称</span>
+                        <input
+                          className="settings-input-field"
+                          value={form.knowledge_embedding_model}
+                          disabled={!form.knowledge_enabled}
+                          onChange={(e) => updateForm({ ...form, knowledge_embedding_model: e.target.value })}
+                          placeholder="BAAI/bge-small-zh-v1.5"
+                        />
+                        <span className="settings-input-caption">ModelScope 上的模型 ID，如 BAAI/bge-small-zh-v1.5。</span>
+                      </label>
+                    ) : (
+                      <div className="settings-inline-alert warning">
+                        <strong>在线 Embedding API 暂不可用</strong>
+                        <span>在线 API 模式仍在开发中，请切换为本地 HuggingFace 或 ModelScope 源。</span>
+                      </div>
+                    )}
                   </div>
-                )}
+                </section>
+
+                <section className="settings-tree-panel">
+                  <header className="settings-tree-panel-header">
+                    <span className="settings-tree-index">03</span>
+                    <div>
+                      <h3>知识库 LLM</h3>
+                      <p>自动打标和知识库问答可以跟随主 LLM，也可以使用独立配置。</p>
+                    </div>
+                  </header>
+                  <div className="settings-tree-grid">
+                    <label
+                      className={`settings-input-group settings-focus-target ${activeFocusTarget === "knowledge_llm_mode" ? "is-highlighted" : ""}`}
+                      ref={registerFocusTarget("knowledge_llm_mode") as (node: HTMLLabelElement | null) => void}
+                    >
+                      <span className="settings-input-label">LLM 来源</span>
+                      <select
+                        className="settings-select-field"
+                        value={form.knowledge_llm_mode || "same_as_main"}
+                        disabled={!form.knowledge_enabled}
+                        onChange={(e) => updateForm({ ...form, knowledge_llm_mode: e.target.value })}
+                      >
+                        <option value="same_as_main">跟随主 LLM</option>
+                        <option value="custom">使用独立配置</option>
+                      </select>
+                      <span className="settings-input-caption">"跟随主 LLM" 会直接复用摘要 LLM 的 Base URL、API Key 与模型名。</span>
+                    </label>
+                    {knowledgeLlmUsesCustom ? (
+                      <>
+                        <label
+                          className={`settings-input-group settings-focus-target ${activeFocusTarget === "knowledge_llm_enabled" ? "is-highlighted" : ""}`}
+                          ref={registerFocusTarget("knowledge_llm_enabled") as (node: HTMLLabelElement | null) => void}
+                        >
+                          <span className="settings-input-label">启用知识库 LLM</span>
+                          <select
+                            className="settings-select-field"
+                            value={form.knowledge_llm_enabled ? "true" : "false"}
+                            disabled={!form.knowledge_enabled}
+                            onChange={(e) => updateForm({ ...form, knowledge_llm_enabled: e.target.value === "true" })}
+                          >
+                            <option value="false">关闭</option>
+                            <option value="true">开启</option>
+                          </select>
+                        </label>
+                        {form.knowledge_llm_enabled ? (
+                          <>
+                            <label className="settings-input-group" ref={registerFocusTarget("knowledge_llm_provider") as (node: HTMLLabelElement | null) => void}>
+                              <span className="settings-input-label">LLM 提供商</span>
+                              <select
+                                className="settings-select-field"
+                                value={form.knowledge_llm_provider || "openai-compatible"}
+                                disabled={!form.knowledge_enabled}
+                                onChange={(e) => updateForm({ ...form, knowledge_llm_provider: e.target.value })}
+                              >
+                                <option value="openai-compatible">OpenAI Compatible</option>
+                                <option value="openai">OpenAI</option>
+                                <option value="anthropic">Anthropic</option>
+                                <option value="custom">自建端点</option>
+                              </select>
+                            </label>
+                            <label className="settings-input-group" ref={registerFocusTarget("knowledge_llm_base_url") as (node: HTMLLabelElement | null) => void}>
+                              <span className="settings-input-label">API Base URL</span>
+                              <input className="settings-input-field" value={form.knowledge_llm_base_url} disabled={!form.knowledge_enabled} onChange={(e) => updateForm({ ...form, knowledge_llm_base_url: e.target.value })} placeholder="https://api.openai.com/v1" />
+                              <span className="settings-input-caption">知识库问答与自动打标 LLM API 的基础 URL 地址。</span>
+                            </label>
+                            <label className="settings-input-group" ref={registerFocusTarget("knowledge_llm_api_key") as (node: HTMLLabelElement | null) => void}>
+                              <span className="settings-input-label">API Key</span>
+                              <input className="settings-input-field" type="password" value={form.knowledge_llm_api_key} disabled={!form.knowledge_enabled} onFocus={selectMaskedApiKey} onChange={(e) => updateForm({ ...form, knowledge_llm_api_key: e.target.value })} placeholder="sk-..." />
+                              <span className="settings-input-caption">知识库 LLM 服务的 API 密钥。</span>
+                            </label>
+                            <label className="settings-input-group" ref={registerFocusTarget("knowledge_llm_model") as (node: HTMLLabelElement | null) => void}>
+                              <span className="settings-input-label">模型名称</span>
+                              <input className="settings-input-field" value={form.knowledge_llm_model} disabled={!form.knowledge_enabled} onChange={(e) => updateForm({ ...form, knowledge_llm_model: e.target.value })} placeholder="gpt-4o-mini / claude-3-haiku" />
+                              <span className="settings-input-caption">要用于知识库问答和自动打标的 LLM 模型名称。</span>
+                            </label>
+                            <div className="settings-inline-actions">
+                              <button className="secondary-button" type="button" disabled={llmTestBusy || !form.knowledge_enabled} onClick={() => void testKnowledgeLlmConnection()}>
+                                {llmTestBusy ? "测试中..." : "测试知识库 LLM"}
+                              </button>
+                              <span className="settings-input-caption">使用当前表单中的 Base URL、API Key 和模型名临时请求一次，并校验是否能返回合法 JSON，不会保存设置。</span>
+                            </div>
+                          </>
+                        ) : null}
+                      </>
+                    ) : (
+                      <div className={`settings-inline-alert ${knowledgeLlmReady ? "success" : "warning"}`}>
+                        <strong>{knowledgeLlmReady ? "知识库当前跟随主 LLM" : "知识库当前跟随主 LLM，但主 LLM 还未补全"}</strong>
+                        <span>{knowledgeLlmReady ? "自动打标和问答会直接复用主 LLM 配置。" : "请先启用主 LLM，并补全 API Key、Base URL 与模型名，或切换为独立配置。"}</span>
+                      </div>
+                    )}
+                  </div>
+                </section>
               </div>
             </section>
           )}

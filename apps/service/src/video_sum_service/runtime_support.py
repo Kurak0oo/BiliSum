@@ -1709,6 +1709,7 @@ def serialize_settings(
         "knowledge_llm_api_key": "",
         "knowledge_llm_api_key_configured": bool(current_settings.knowledge_llm_api_key),
         "knowledge_enabled": current_settings.knowledge_enabled,
+        "knowledge_embedding_provider": current_settings.knowledge_embedding_provider,
         "knowledge_embedding_model": current_settings.knowledge_embedding_model,
         "hf_endpoint": current_settings.hf_endpoint,
         "knowledge_index_auto_rebuild": current_settings.knowledge_index_auto_rebuild,

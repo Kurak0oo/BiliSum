@@ -475,6 +475,19 @@ def normalize_funasr_hub(value: str | None, default: str = "ms") -> str:
     return "hf" if normalized in ("hf", "huggingface") else "ms"
 
 
+def normalize_knowledge_embedding_provider(value: str | None, default: str = "local_huggingface") -> str:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return default
+    if normalized in ("local_huggingface", "huggingface", "hf"):
+        return "local_huggingface"
+    if normalized in ("local_modelscope", "modelscope", "ms"):
+        return "local_modelscope"
+    if normalized in ("online", "api"):
+        return "online"
+    return default
+
+
 def recommend_task_concurrency(settings: "ServiceSettings", *, cuda_available: bool | None = None) -> int:
     provider = normalize_transcription_provider(settings.transcription_provider)
     if provider == "local":
@@ -580,6 +593,7 @@ class ServiceSettings(BaseSettings):
     knowledge_llm_base_url: str = ""
     knowledge_llm_model: str = ""
     knowledge_enabled: bool = False
+    knowledge_embedding_provider: str = "local_huggingface"
     knowledge_embedding_model: str = "BAAI/bge-small-zh-v1.5"
     hf_endpoint: str = ""
     knowledge_index_auto_rebuild: str = "disabled"
@@ -622,6 +636,11 @@ class ServiceSettings(BaseSettings):
     @classmethod
     def _normalize_knowledge_llm_mode(cls, value: str | None) -> str:
         return normalize_knowledge_llm_mode(value)
+
+    @field_validator("knowledge_embedding_provider", mode="before")
+    @classmethod
+    def _normalize_knowledge_embedding_provider(cls, value: str | None) -> str:
+        return normalize_knowledge_embedding_provider(value)
 
     @field_validator("visual_note_mode", mode="before")
     @classmethod

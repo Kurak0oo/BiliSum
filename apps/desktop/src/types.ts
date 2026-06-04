@@ -422,6 +422,7 @@ export type ServiceSettings = {
   knowledge_llm_model: string;
   knowledge_llm_api_key_configured?: boolean;
   knowledge_enabled: boolean;
+  knowledge_embedding_provider: string;
   knowledge_embedding_model: string;
   hf_endpoint: string;
   knowledge_index_auto_rebuild: string;

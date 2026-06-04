@@ -86,31 +86,53 @@ class KnowledgeIndexService:
             ) from exc
 
     def _get_embedder(self):
-        if self._embedder is None:
-            sentence_transformers = self._import_runtime_dependency(
-                "sentence_transformers",
-                "sentence-transformers",
-                "缺少 sentence-transformers 依赖，无法构建知识库索引。",
+        if self._embedder is not None:
+            return self._embedder
+
+        provider = self._settings.knowledge_embedding_provider
+        if provider == "online":
+            raise HTTPException(
+                status_code=501,
+                detail="在线 Embedding API 暂未支持，请切换为本地 HuggingFace 或 ModelScope 源。",
             )
-            try:
-                # Apply user-configured HuggingFace mirror / endpoint
+
+        sentence_transformers = self._import_runtime_dependency(
+            "sentence_transformers",
+            "sentence-transformers",
+            "缺少 sentence-transformers 依赖，无法构建知识库索引。",
+        )
+        try:
+            if provider == "local_modelscope":
+                _modelscope = self._import_runtime_dependency(
+                    "modelscope",
+                    "modelscope",
+                    "使用 ModelScope 源需要安装 modelscope 依赖。",
+                )
+                from modelscope.hub.snapshot_download import snapshot_download
+                model_path = snapshot_download(self._model_name)
+                self._embedder = sentence_transformers.SentenceTransformer(
+                    model_path, local_files_only=True
+                )
+            else:
+                # local_huggingface — use HF Endpoint mirror if configured
                 if self._settings.hf_endpoint:
                     os.environ["HF_ENDPOINT"] = self._settings.hf_endpoint
                 self._embedder = sentence_transformers.SentenceTransformer(self._model_name)
-            except Exception as exc:
-                logger.exception(
-                    "knowledge embedding model load failed model=%s runtime_channel=%s hf_endpoint=%s",
-                    self._model_name,
-                    self._settings.runtime_channel,
-                    self._settings.hf_endpoint or "(default)",
-                )
-                raise HTTPException(
-                    status_code=500,
-                    detail=(
-                        f"知识库向量模型加载失败：{self._short_error(exc)}。"
-                        "请检查网络 / HuggingFace 缓存，或稍后重试。"
-                    ),
-                ) from exc
+        except Exception as exc:
+            logger.exception(
+                "knowledge embedding model load failed model=%s provider=%s runtime_channel=%s hf_endpoint=%s",
+                self._model_name,
+                provider,
+                self._settings.runtime_channel,
+                self._settings.hf_endpoint or "(default)",
+            )
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"知识库向量模型加载失败：{self._short_error(exc)}。"
+                    "请检查网络 / HuggingFace 缓存，或稍后重试。"
+                ),
+            ) from exc
         return self._embedder
 
     def _get_collection(self):
