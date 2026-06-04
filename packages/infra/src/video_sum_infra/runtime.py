@@ -8,6 +8,20 @@ import shutil
 import sys
 import threading
 import time
+
+# Guard: torch's _load_dll_libraries calls os.add_dll_directory() for
+# torch/lib, which can fail with WinError 206 on portable Python builds
+# even though the path is well under MAX_PATH.  The directory is already
+# on PATH (set by runtime_subprocess_env / activate_runtime_dll_directories),
+# so swallowing this error is safe — DLL loading via PATH still works.
+_original_add_dll_directory = getattr(os, "add_dll_directory", None)
+if _original_add_dll_directory is not None:
+    def _safe_add_dll_directory(path):
+        try:
+            return _original_add_dll_directory(path)
+        except (FileNotFoundError, OSError):
+            return None
+    os.add_dll_directory = _safe_add_dll_directory
 from pathlib import Path
 
 

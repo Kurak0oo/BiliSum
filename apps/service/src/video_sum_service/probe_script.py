@@ -8,6 +8,22 @@ is executed via ``python -c`` by concatenating test shims, and __future__
 imports must appear at the very start of the file.
 """
 
+# Guard: torch's _load_dll_libraries calls os.add_dll_directory()
+# for torch/lib, which can fail with WinError 206 on portable Python
+# builds even though the path is well under MAX_PATH.  The directory
+# is already on PATH (set by runtime_subprocess_env), so swallowing
+# this error is safe — DLL loading via PATH still works.
+import os as _os
+_original_add_dll_directory = getattr(_os, "add_dll_directory", None)
+if _original_add_dll_directory is not None:
+    def _safe_add_dll_directory(path):
+        try:
+            return _original_add_dll_directory(path)
+        except (FileNotFoundError, OSError):
+            return None
+    _os.add_dll_directory = _safe_add_dll_directory
+del _os, _original_add_dll_directory
+
 import importlib
 import importlib.metadata
 import json
