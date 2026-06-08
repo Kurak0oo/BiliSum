@@ -3212,30 +3212,27 @@ export function SettingsPage({
                             <span className="settings-input-caption">国内用户建议填写 https://hf-mirror.com 加速下载。</span>
                           </label>
                         ) : null}
-                        <label className="settings-input-group">
-                          <span className="settings-input-label">操作</span>
-                          <div className="settings-actions">
-                            <button
-                              className="secondary-button"
-                              type="button"
-                              disabled={embeddingDownloading || !form.knowledge_enabled}
-                              onClick={() => void downloadEmbeddingModel()}
-                            >
-                              {embeddingDownloading ? "下载中..." : "下载模型"}
-                            </button>
-                            <button
-                              className="secondary-button"
-                              type="button"
-                              disabled={embeddingTesting || embeddingDownloading || !form.knowledge_enabled}
-                              onClick={() => void testEmbeddingModel()}
-                            >
-                              {embeddingTesting ? "验证中..." : "验证模型"}
-                            </button>
-                            {embeddingVerified ? (
-                              <span className="settings-status-pill success">已就绪</span>
-                            ) : null}
-                          </div>
-                        </label>
+                        <div className="settings-inline-actions" style={{ gridColumn: "1 / -1" }}>
+                          <button
+                            className="secondary-button"
+                            type="button"
+                            disabled={embeddingDownloading || !form.knowledge_enabled}
+                            onClick={() => void downloadEmbeddingModel()}
+                          >
+                            {embeddingDownloading ? "下载中..." : "下载模型"}
+                          </button>
+                          <button
+                            className="secondary-button"
+                            type="button"
+                            disabled={embeddingTesting || embeddingDownloading || !form.knowledge_enabled}
+                            onClick={() => void testEmbeddingModel()}
+                          >
+                            {embeddingTesting ? "验证中..." : "验证模型"}
+                          </button>
+                          {embeddingVerified ? (
+                            <span className="settings-status-pill success">已就绪</span>
+                          ) : null}
+                        </div>
                         {embeddingStatus ? (
                           <div className={`settings-inline-alert ${embeddingVerified ? "success" : embeddingStatus.includes("失败") ? "warning" : "info"}`}>
                             <span>{embeddingStatus}</span>

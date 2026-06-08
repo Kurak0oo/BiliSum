@@ -96,8 +96,6 @@ def chat_knowledge_llm(
     }
     if require_json:
         payload["response_format"] = {"type": "json_object"}
-        payload["enable_thinking"] = False
-        payload["chat_template_kwargs"] = {"enable_thinking": False}
     request_url = anthropic_messages_url(base_url) if use_anthropic else openai_chat_completions_url(base_url)
     request_payload = build_anthropic_messages_payload(payload) if use_anthropic else payload
 

@@ -202,6 +202,37 @@ def load_asr_test_audio() -> tuple[str, bytes, str]:
         return "bilisum-asr-test.wav", build_test_wav_bytes(), "audio/wav"
 
 
+def _extract_json_object(text: str) -> dict[str, object] | None:
+    """Try to extract a JSON object from text that may have markdown fences or extra content."""
+    import re
+    t = text.strip()
+    # Strip markdown code fences
+    for fence in ("```json", "```"):
+        if t.startswith(fence):
+            t = t[len(fence):]
+            if t.endswith("```"):
+                t = t[:-3]
+            t = t.strip()
+            break
+    # Try direct parse first
+    try:
+        result = json.loads(t)
+        if isinstance(result, dict):
+            return result
+    except (json.JSONDecodeError, ValueError):
+        pass
+    # Try to find a JSON object with regex
+    m = re.search(r'\{[^{}]*\{[^{}]*\}[^{}]*\}|\{[^{}]*\}', t)
+    if m:
+        try:
+            result = json.loads(m.group())
+            if isinstance(result, dict):
+                return result
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return None
+
+
 def build_effective_llm_test_settings(payload: SettingsUpdatePayload | None = None) -> ServiceSettings:
     current_settings = settings_manager.current
     current_dump = current_settings.model_dump(mode="json")
@@ -278,10 +309,8 @@ def probe_llm_connection(payload: SettingsUpdatePayload | None = None) -> dict[s
                 },
             ],
             "temperature": 0,
-            "max_tokens": 96,
+            "max_tokens": 256,
             "response_format": {"type": "json_object"},
-            "enable_thinking": False,
-            "chat_template_kwargs": {"enable_thinking": False},
         }
     else:
         request_payload = {
@@ -289,21 +318,15 @@ def probe_llm_connection(payload: SettingsUpdatePayload | None = None) -> dict[s
             "messages": [
                 {
                     "role": "system",
-                    "content": "你是一个 JSON 测试助手。你只能返回合法 JSON，不能输出任何额外文字。",
+                    "content": "你只输出一行合法 JSON，不要 markdown 代码块，不要解释文字。",
                 },
                 {
                     "role": "user",
-                    "content": (
-                        "请只返回一个合法 JSON 对象，不要带 markdown 代码块，不要带解释。"
-                        '格式必须是：{"ok":true,"message":"test"}'
-                    ),
+                    "content": '输出 {"ok":true,"message":"test"}',
                 },
             ],
             "temperature": 0,
-            "max_tokens": 64,
-            "response_format": {"type": "json_object"},
-            "enable_thinking": False,
-            "chat_template_kwargs": {"enable_thinking": False},
+            "max_tokens": 512,
         }
     # For visual tests with images, only the real Anthropic API supports image
     # blocks via /messages. Third-party Anthropic-compatible endpoints
@@ -364,11 +387,13 @@ def probe_llm_connection(payload: SettingsUpdatePayload | None = None) -> dict[s
 
     try:
         parsed_json = json.loads(preview)
-    except json.JSONDecodeError as exc:
+    except json.JSONDecodeError:
+        parsed_json = _extract_json_object(preview)
+    if parsed_json is None:
         raise HTTPException(
             status_code=502,
-            detail=f"LLM 测试失败：接口可访问，但当前模型未返回合法 JSON。{exc.msg}",
-        ) from exc
+            detail=f"LLM 测试失败：未返回合法 JSON。响应预览：{preview[:200]}",
+        )
 
     if test_scope == "visual":
         parsed_text = json.dumps(parsed_json, ensure_ascii=False).lower()

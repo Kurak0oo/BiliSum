@@ -2322,9 +2322,7 @@ def test_llm_connection_normalizes_mimo_model_and_requests_json_mode(monkeypatch
     assert response["ok"] is True
     assert response["model"] == "MiMo-V2.5-Pro"
     assert calls[0]["json"]["model"] == "mimo-v2.5-pro"
-    assert calls[0]["json"]["response_format"] == {"type": "json_object"}
-    assert calls[0]["json"]["enable_thinking"] is False
-    assert calls[0]["json"]["chat_template_kwargs"] == {"enable_thinking": False}
+    assert calls[0]["json"]["max_tokens"] == 512
 
 
 def test_llm_connection_accepts_choice_text_response(monkeypatch, tmp_path: Path) -> None:

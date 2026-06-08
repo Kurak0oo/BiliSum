@@ -145,10 +145,27 @@ class KnowledgeIndexService:
             try:
                 self._chroma_path.mkdir(parents=True, exist_ok=True)
                 client = chromadb.PersistentClient(path=str(self._chroma_path))
-                self._collection = client.get_or_create_collection(
-                    name="bilisum_knowledge",
-                    metadata={"hnsw:space": "cosine"},
-                )
+                # Determine embedding dimension from the model before creating
+                # the collection, so chromadb can validate vector dimensions.
+                embedder = self._get_embedder()
+                dim = embedder.get_sentence_embedding_dimension() or 0
+                existing = None
+                try:
+                    existing = client.get_collection("bilisum_knowledge")
+                except Exception:
+                    pass
+                if existing is not None:
+                    existing_dim = (existing.metadata or {}).get("embedding_dim", 0) if hasattr(existing, "metadata") else 0
+                    if int(existing_dim or 0) != int(dim):
+                        client.delete_collection("bilisum_knowledge")
+                        existing = None
+                if existing is None:
+                    self._collection = client.create_collection(
+                        name="bilisum_knowledge",
+                        metadata={"hnsw:space": "cosine", "embedding_dim": dim},
+                    )
+                else:
+                    self._collection = existing
             except Exception as exc:
                 logger.exception(
                     "knowledge chromadb collection init failed path=%s runtime_channel=%s",
