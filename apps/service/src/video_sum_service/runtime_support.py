@@ -2192,7 +2192,7 @@ _EMBEDDING_MODEL_PRESETS: dict[str, str] = {
 def _build_embedding_download_script(provider: str, model_name: str, hf_endpoint: str = "") -> str:
     if provider == "local_modelscope":
         return (
-            "import sys, json, traceback;"
+            "import sys, json, traceback\n"
             "try:\n"
             " from modelscope.hub.snapshot_download import snapshot_download\n"
             f" print(f'ModelScope downloading {model_name}...', file=sys.stderr)\n"
@@ -2204,10 +2204,10 @@ def _build_embedding_download_script(provider: str, model_name: str, hf_endpoint
             " print(json.dumps({'ok': False, 'error': str(e)}))"
         )
     else:
-        hf_mirror_line = f"import os; os.environ['HF_ENDPOINT'] = '{hf_endpoint}';" if hf_endpoint else ""
+        hf_mirror_newline = f"import os\nos.environ['HF_ENDPOINT']='{hf_endpoint}'\n" if hf_endpoint else ""
         return (
-            f"{hf_mirror_line}"
-            "import sys, json, traceback;"
+            f"{hf_mirror_newline}"
+            "import sys, json, traceback\n"
             "try:\n"
             " from huggingface_hub import snapshot_download\n"
             f" print(f'HF downloading {model_name}...', file=sys.stderr)\n"
@@ -2223,29 +2223,37 @@ def _build_embedding_download_script(provider: str, model_name: str, hf_endpoint
 def _build_embedding_verify_script(provider: str, model_name: str, hf_endpoint: str = "") -> str:
     if provider == "local_modelscope":
         return (
-            "import sys, json;"
-            "from modelscope.hub.snapshot_download import snapshot_download;"
-            "from sentence_transformers import SentenceTransformer;"
-            f"print('ModelScope loading {model_name}...', file=sys.stderr);"
-            f"path = snapshot_download('{model_name}');"
-            "m = SentenceTransformer(path, local_files_only=True);"
-            f"print('Running test encode...', file=sys.stderr);"
-            "v = m.encode(['hello world']);"
-            f"print(f'[OK] dim={{v.shape[1]}}', file=sys.stderr);"
-            "print(json.dumps({'ok': True, 'dim': int(v.shape[1])}))"
+            "import sys, json, traceback\n"
+            "try:\n"
+            " from modelscope.hub.snapshot_download import snapshot_download\n"
+            " from sentence_transformers import SentenceTransformer\n"
+            f" print(f'ModelScope loading {model_name}...', file=sys.stderr)\n"
+            f" path = snapshot_download('{model_name}')\n"
+            " m = SentenceTransformer(path, local_files_only=True)\n"
+            " print('Running test encode...', file=sys.stderr)\n"
+            " v = m.encode(['hello world'])\n"
+            " print(f'[OK] dim={v.shape[1]}', file=sys.stderr)\n"
+            " print(json.dumps({'ok': True, 'dim': int(v.shape[1])}))\n"
+            "except Exception as e:\n"
+            " traceback.print_exc(file=sys.stderr)\n"
+            " print(json.dumps({'ok': False, 'error': str(e)}))"
         )
     else:
-        hf_mirror_line = f"import os; os.environ['HF_ENDPOINT'] = '{hf_endpoint}';" if hf_endpoint else ""
+        hf_mirror_newline = f"import os\nos.environ['HF_ENDPOINT']='{hf_endpoint}'\n" if hf_endpoint else ""
         return (
-            f"{hf_mirror_line}"
-            "import sys, json;"
-            "from sentence_transformers import SentenceTransformer;"
-            f"print('SentenceTransformer loading {model_name}...', file=sys.stderr);"
-            f"m = SentenceTransformer('{model_name}');"
-            f"print('Running test encode...', file=sys.stderr);"
-            "v = m.encode(['hello world']);"
-            f"print(f'[OK] dim={{v.shape[1]}}', file=sys.stderr);"
-            "print(json.dumps({'ok': True, 'dim': int(v.shape[1])}))"
+            f"{hf_mirror_newline}"
+            "import sys, json, traceback\n"
+            "try:\n"
+            " from sentence_transformers import SentenceTransformer\n"
+            f" print(f'SentenceTransformer loading {model_name}...', file=sys.stderr)\n"
+            f" m = SentenceTransformer('{model_name}')\n"
+            " print('Running test encode...', file=sys.stderr)\n"
+            " v = m.encode(['hello world'])\n"
+            " print(f'[OK] dim={v.shape[1]}', file=sys.stderr)\n"
+            " print(json.dumps({'ok': True, 'dim': int(v.shape[1])}))\n"
+            "except Exception as e:\n"
+            " traceback.print_exc(file=sys.stderr)\n"
+            " print(json.dumps({'ok': False, 'error': str(e)}))"
         )
 
 
