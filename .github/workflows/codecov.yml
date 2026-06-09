@@ -26,7 +26,7 @@ jobs:
 
     - name: 安装依赖
       run: |
-        uv pip install --system -e ".[dev]"
+        uv sync --frozen --all-packages
         uv pip install --system pytest-cov
 
     - name: 运行测试并生成覆盖率
