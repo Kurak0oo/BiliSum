@@ -129,18 +129,6 @@ VLM 理解型图文笔记是一版从零设计的笔记生成方式：VLM 阅读
 - Windows / macOS
 - 可选：`ffmpeg`、CUDA
 
-### npx 入口
-
-```powershell
-npx bilisum
-npx bilisum start --port 3839
-npx bilisum doctor
-```
-
-`npx bilisum` 在本机启动浏览器版服务，默认 `http://127.0.0.1:3838`。首次运行自动创建 Python 虚拟环境，需要本机已装 Python 3.12。
-
-浏览器版受访问密钥保护。未配置 `VIDEO_SUM_ACCESS_TOKEN` 时自动生成；远程部署建议手动设置长随机密钥。
-
 ### 安装依赖
 
 ```powershell

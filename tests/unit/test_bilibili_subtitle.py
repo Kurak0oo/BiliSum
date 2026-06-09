@@ -7,19 +7,22 @@ from video_sum_service.integrations import fetch_bilibili_subtitle
 
 
 def test_fetch_bilibili_subtitle_success():
-    """测试成功获取字幕"""
-    mock_player_response = MagicMock()
-    mock_player_response.status_code = 200
-    mock_player_response.json.return_value = {
+    """测试成功获取字幕（通过 WBI API）"""
+    # Mock WBI API response
+    mock_wbi_response = MagicMock()
+    mock_wbi_response.status_code = 200
+    mock_wbi_response.json.return_value = {
+        "code": 0,
         "data": {
             "subtitle": {
                 "subtitles": [
-                    {"subtitle_url": "https://example.com/subtitle.json"}
+                    {"subtitle_url": "https://example.com/subtitle.json", "lan": "zh-CN", "lan_doc": "中文（简体）"}
                 ]
             }
         }
     }
 
+    # Mock subtitle content response
     mock_subtitle_response = MagicMock()
     mock_subtitle_response.status_code = 200
     mock_subtitle_response.json.return_value = {
@@ -31,9 +34,10 @@ def test_fetch_bilibili_subtitle_success():
 
     with patch("httpx.Client") as mock_client:
         mock_instance = mock_client.return_value.__enter__.return_value
-        mock_instance.get.side_effect = [mock_player_response, mock_subtitle_response]
+        # 第一次调用：WBI API，第二次调用：字幕内容
+        mock_instance.get.side_effect = [mock_wbi_response, mock_subtitle_response]
 
-        result = fetch_bilibili_subtitle(aid=12345, cid=67890, cookie="test_cookie")
+        result = fetch_bilibili_subtitle(aid=12345, cid=67890, cookie="test_cookie", bvid="BV1test")
 
     assert result is not None
     assert result["transcript"] == "第一句\n第二句"
@@ -115,16 +119,19 @@ def test_fetch_bilibili_subtitle_empty_body():
 
 def test_fetch_bilibili_subtitle_with_protocol_fix():
     """测试字幕 URL 缺少协议前缀"""
-    mock_player_response = MagicMock()
-    mock_player_response.status_code = 200
-    mock_player_response.json.return_value = {
+    # Mock WBI API response with protocol-less URL
+    mock_wbi_response = MagicMock()
+    mock_wbi_response.status_code = 200
+    mock_wbi_response.json.return_value = {
+        "code": 0,
         "data": {
             "subtitle": {
-                "subtitles": [{"subtitle_url": "//i0.hdslb.com/subtitle.json"}]
+                "subtitles": [{"subtitle_url": "//i0.hdslb.com/subtitle.json", "lan": "zh-CN", "lan_doc": "中文（简体）"}]
             }
         }
     }
 
+    # Mock subtitle content response
     mock_subtitle_response = MagicMock()
     mock_subtitle_response.status_code = 200
     mock_subtitle_response.json.return_value = {
@@ -133,9 +140,9 @@ def test_fetch_bilibili_subtitle_with_protocol_fix():
 
     with patch("httpx.Client") as mock_client:
         mock_instance = mock_client.return_value.__enter__.return_value
-        mock_instance.get.side_effect = [mock_player_response, mock_subtitle_response]
+        mock_instance.get.side_effect = [mock_wbi_response, mock_subtitle_response]
 
-        result = fetch_bilibili_subtitle(aid=12345, cid=67890)
+        result = fetch_bilibili_subtitle(aid=12345, cid=67890, bvid="BV1test")
 
     assert result is not None
     # 验证第二次请求的 URL 包含 https:

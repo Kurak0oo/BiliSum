@@ -129,9 +129,6 @@ jobs:
       - name: Build desktop app
         run: npm run build
 
-      - name: Validate npx package
-        run: npm run npx:test
-
   validate-windows-package:
     needs: detect-desktop-package-check
     if: ${{ needs.detect-desktop-package-check.outputs.should_run == 'true' }}
