@@ -241,13 +241,15 @@ try {
 
     Write-Host "Patching electron-builder to use local rcedit when available..."
     node $rceditPatchScript
-    if ($LASTEXITCODE -ne 0) {
-        throw "electron-builder rcedit patch failed."
+    if ($LASTEXITCODE -eq 0) {
+        # Patch succeeded - set up local rcedit
+        $localRcedit = Ensure-LocalRcedit
+        Write-Host "Using local rcedit:" $localRcedit
+        $env:BILISUM_RCEDIT_PATH = $localRcedit
     }
-
-    $localRcedit = Ensure-LocalRcedit
-    Write-Host "Using local rcedit:" $localRcedit
-    $env:BILISUM_RCEDIT_PATH = $localRcedit
+    else {
+        Write-Warning "electron-builder rcedit patch failed (likely due to version mismatch). Continuing without local rcedit optimization."
+    }
 
     # Disable code signing on Windows to avoid symlink issues with darwin libraries
     Write-Host "Building with code signing disabled..."
