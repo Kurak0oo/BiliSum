@@ -76,6 +76,14 @@ def probe() -> dict:
         "torchInstalled": torch is not None,
         "torchVersion": torch.__version__ if torch is not None else "",
         "torchError": torch_error,
+        "torchvisionInstalled": False,
+        "torchvisionVersion": "",
+        "torchvisionBroken": False,
+        "torchvisionError": "",
+        "torchaudioInstalled": False,
+        "torchaudioVersion": "",
+        "torchaudioBroken": False,
+        "torchaudioError": "",
         "cudaAvailable": cuda_available,
         "gpuName": gpu_name,
         "ytDlpVersion": importlib.metadata.version("yt-dlp"),
@@ -84,16 +92,40 @@ def probe() -> dict:
         "localAsrAvailable": False,
         "chromadbVersion": "",
         "chromadbInstalled": False,
+        "chromadbBroken": False,
         "chromadbError": "",
         "sentenceTransformersVersion": "",
         "sentenceTransformersInstalled": False,
+        "sentenceTransformersBroken": False,
         "sentenceTransformersError": "",
+        "modelscopeVersion": "",
+        "modelscopeInstalled": False,
+        "modelscopeBroken": False,
+        "modelscopeError": "",
         "knowledgeDependenciesReady": False,
         "knowledgeDependenciesError": "",
         "ffmpegLocation": "",
         "recommendedModel": "large-v3-turbo" if cuda_available else "base",
         "recommendedDevice": "cuda" if cuda_available else "cpu",
     }
+
+    torchvision_installed, torchvision_version, torchvision_error = importable_distribution(
+        "torchvision", "torchvision"
+    )
+    torchvision_broken = bool(torchvision_version and torchvision_error)
+    payload["torchvisionVersion"] = torchvision_version
+    payload["torchvisionInstalled"] = torchvision_installed
+    payload["torchvisionBroken"] = torchvision_broken
+    payload["torchvisionError"] = torchvision_error
+
+    torchaudio_installed, torchaudio_version, torchaudio_error = importable_distribution(
+        "torchaudio", "torchaudio"
+    )
+    torchaudio_broken = bool(torchaudio_version and torchaudio_error)
+    payload["torchaudioVersion"] = torchaudio_version
+    payload["torchaudioInstalled"] = torchaudio_installed
+    payload["torchaudioBroken"] = torchaudio_broken
+    payload["torchaudioError"] = torchaudio_error
 
     try:
         payload["localAsrVersion"] = importlib.metadata.version("faster-whisper")
@@ -108,21 +140,35 @@ def probe() -> dict:
     payload["funasrVersion"] = funasr_version
     payload["funasrInstalled"] = funasr_installed
     payload["funasrAvailable"] = funasr_installed
+    payload["funasrBroken"] = bool(funasr_version and funasr_error)
     payload["funasrError"] = funasr_error
 
     chromadb_installed, chromadb_version, chromadb_error = importable_distribution(
         "chromadb", "chromadb"
     )
+    chromadb_broken = bool(chromadb_version and chromadb_error)
     payload["chromadbVersion"] = chromadb_version
     payload["chromadbInstalled"] = chromadb_installed
+    payload["chromadbBroken"] = chromadb_broken
     payload["chromadbError"] = chromadb_error
 
     st_installed, st_version, st_error = importable_distribution(
         "sentence-transformers", "sentence_transformers"
     )
+    st_broken = bool(st_version and st_error)
     payload["sentenceTransformersVersion"] = st_version
     payload["sentenceTransformersInstalled"] = st_installed
+    payload["sentenceTransformersBroken"] = st_broken
     payload["sentenceTransformersError"] = st_error
+
+    modelscope_installed, modelscope_version, modelscope_error = importable_distribution(
+        "modelscope", "modelscope"
+    )
+    modelscope_broken = bool(modelscope_version and modelscope_error)
+    payload["modelscopeVersion"] = modelscope_version
+    payload["modelscopeInstalled"] = modelscope_installed
+    payload["modelscopeBroken"] = modelscope_broken
+    payload["modelscopeError"] = modelscope_error
 
     payload["knowledgeDependenciesReady"] = bool(
         payload.get("chromadbInstalled") and payload.get("sentenceTransformersInstalled")

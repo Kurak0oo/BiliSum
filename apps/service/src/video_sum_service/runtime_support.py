@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+from types import SimpleNamespace
 
 import time
 import venv
@@ -52,7 +53,7 @@ from video_sum_infra.runtime import (
 
 from video_sum_service.context import logger, settings_manager
 from video_sum_service.repository import SqliteTaskRepository
-from video_sum_service.settings_manager import SettingsUpdatePayload
+from video_sum_service.settings_manager import SettingsUpdatePayload, is_blank_or_masked_secret
 
 if TYPE_CHECKING:
     from video_sum_service.worker import TaskWorker
@@ -91,6 +92,53 @@ _RUNTIME_ROOT_APP_FILES: frozenset[str] = frozenset({"pythonpath.pth"})
 _RUNTIME_ROOT_STALE_FILES: frozenset[str] = frozenset({"pyvenv.cfg"})
 _RUNTIME_REQUIREMENT_NAME_PATTERN = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9_.-]*)")
 _RUNTIME_CHANNEL_PATTERN = re.compile(r"^(base|gpu-cu\d+)$")
+_TORCH_FAMILY_PACKAGES: tuple[str, ...] = ("torch", "torchvision", "torchaudio")
+
+
+def _knowledge_dependency_probe_fields(package: str) -> tuple[str, str, str]:
+    normalized = str(package or "").strip().lower()
+    if normalized == "chromadb":
+        return "chromadbInstalled", "chromadbBroken", "chromadbError"
+    if normalized == "sentence-transformers":
+        return "sentenceTransformersInstalled", "sentenceTransformersBroken", "sentenceTransformersError"
+    if normalized == "modelscope":
+        return "modelscopeInstalled", "modelscopeBroken", "modelscopeError"
+    return "", "", ""
+
+
+def apply_knowledge_dependency_policy(
+    environment: dict[str, object],
+    provider: str | None = None,
+) -> dict[str, object]:
+    """Adjust package probe results to the active embedding provider."""
+    active_provider = str(
+        provider or getattr(settings_manager.current, "knowledge_embedding_provider", "local_huggingface")
+    ).strip().lower()
+    requirements = get_knowledge_requirements(active_provider)
+    required = [str(item) for item in requirements.get("required", [])]
+    preinstalled = {str(item) for item in requirements.get("preinstalled", [])}
+    missing: list[str] = []
+    errors: list[str] = []
+
+    for package in required:
+        installed_field, broken_field, error_field = _knowledge_dependency_probe_fields(package)
+        if not installed_field:
+            continue
+        if bool(environment.get(broken_field)):
+            errors.append(str(environment.get(error_field) or f"{package} 已安装但导入失败。"))
+            continue
+        if not bool(environment.get(installed_field)) and package not in preinstalled:
+            missing.append(package)
+
+    environment["knowledgeDependenciesReady"] = not missing and not errors
+    if errors:
+        environment["knowledgeDependenciesError"] = "\n".join(errors)
+    elif missing:
+        environment["knowledgeDependenciesError"] = f"缺少依赖：{', '.join(missing)}"
+    else:
+        environment["knowledgeDependenciesError"] = ""
+    environment["knowledgeRequiredPackages"] = required
+    return environment
 
 
 def _split_env_urls(raw_value: str | None) -> list[str]:
@@ -127,6 +175,11 @@ def _torch_index_candidates(cuda_variant: str) -> list[tuple[str, str]]:
         else:
             logger.warning("skipping invalid custom index URL: %s", url)
     return candidates
+
+
+def _runtime_channel_cuda_variant(runtime_channel: str) -> str:
+    normalized = normalize_runtime_channel(runtime_channel, allow_unknown_gpu=True)
+    return normalized.removeprefix("gpu-") if normalized.startswith("gpu-") else ""
 
 
 def normalize_runtime_channel(runtime_channel: str | None, *, allow_unknown_gpu: bool = False) -> str:
@@ -519,7 +572,7 @@ def _load_cached_environment_probe(runtime_channel: str) -> dict[str, object] | 
     cached = _environment_probe_cache.get(runtime_channel)
     if cached is not None:
         if _cached_environment_probe_usable(runtime_channel, cached):
-            return dict(cached)
+            return apply_knowledge_dependency_policy(dict(cached))
         _environment_probe_cache.pop(runtime_channel, None)
         return None
 
@@ -531,8 +584,9 @@ def _load_cached_environment_probe(runtime_channel: str) -> dict[str, object] | 
         return None
     if not _cached_environment_probe_usable(runtime_channel, entry):
         return None
-    _environment_probe_cache[runtime_channel] = dict(entry)
-    return dict(entry)
+    normalized_entry = apply_knowledge_dependency_policy(dict(entry))
+    _environment_probe_cache[runtime_channel] = dict(normalized_entry)
+    return normalized_entry
 
 
 def _cached_environment_probe_usable(runtime_channel: str, entry: dict[str, object]) -> bool:
@@ -655,6 +709,185 @@ def pip_install_error_detail(
     return "\n\n".join([*hints, last_detail])
 
 
+def _runner_install_session_id(runner: object) -> str | None:
+    session_id = getattr(runner, "session_id", None)
+    return str(session_id) if session_id else None
+
+
+def _sanitize_for_log(value: object) -> str:
+    """Sanitize user input for logging to prevent log injection attacks."""
+    text = str(value)
+    return text.replace("\r", "\\r").replace("\n", "\\n")
+
+
+def cleanup_invalid_runtime_distributions(runtime_channel: str, *, session_id: str | None = None) -> list[str]:
+    """Remove pip leftovers that appear as "Ignoring invalid distribution ~..."."""
+    try:
+        site_packages = runtime_site_packages_dir(runtime_channel)
+    except Exception as exc:
+        logger.debug(
+            "skip invalid distribution cleanup runtime_channel=%s error=%s",
+            _sanitize_for_log(runtime_channel),
+            exc,
+        )
+        return []
+    if not site_packages.exists():
+        return []
+
+    removed: list[str] = []
+    for item in site_packages.iterdir():
+        if not item.name.startswith("~"):
+            continue
+        try:
+            if item.is_dir():
+                _robust_rmtree(item)
+            else:
+                item.unlink(missing_ok=True)
+            removed.append(item.name)
+        except OSError as exc:
+            logger.warning("failed to remove invalid distribution leftover path=%s error=%s", item, exc)
+
+    if removed and session_id:
+        append_install_log(session_id, f"[运行环境] 已清理 pip 残留分发目录：{', '.join(removed)}")
+    return removed
+
+
+def _probe_torch_family(
+    python_executable: Path,
+    runtime_channel: str,
+    *,
+    runner=run_command,
+) -> dict[str, dict[str, object]]:
+    script = r"""
+import importlib
+import importlib.metadata
+import json
+
+payload = {}
+for name in ("torch", "torchvision", "torchaudio"):
+    try:
+        distribution_version = importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        distribution_version = ""
+    error = ""
+    import_version = ""
+    try:
+        module = importlib.import_module(name)
+        import_version = str(getattr(module, "__version__", "") or "")
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"
+    payload[name] = {
+        "distributionVersion": distribution_version,
+        "version": import_version or distribution_version,
+        "importable": not error,
+        "error": error,
+    }
+print(json.dumps(payload, ensure_ascii=False))
+"""
+    try:
+        result = runner(
+            [str(python_executable), "-c", script],
+            runtime_channel=runtime_channel,
+            timeout=120,
+        )
+        lines = [line.strip() for line in str(result.stdout or "").splitlines() if line.strip()]
+        return json.loads(lines[-1] if lines else "{}")
+    except Exception as exc:
+        detail = (exc.stderr or exc.stdout or str(exc)).strip() if isinstance(exc, subprocess.CalledProcessError) else str(exc)
+        return {
+            name: {
+                "distributionVersion": "",
+                "version": "",
+                "importable": False,
+                "error": detail[-1000:],
+            }
+            for name in _TORCH_FAMILY_PACKAGES
+        }
+
+
+def _torch_family_needs_cuda_repair(
+    probe: dict[str, dict[str, object]],
+    cuda_variant: str,
+) -> tuple[bool, list[str]]:
+    expected_suffix = f"+{cuda_variant}".lower()
+    reasons: list[str] = []
+    for package_name in _TORCH_FAMILY_PACKAGES:
+        item = probe.get(package_name, {})
+        version = str(item.get("version") or item.get("distributionVersion") or "")
+        error = str(item.get("error") or "")
+        if error:
+            reasons.append(f"{package_name} 导入失败：{error[-240:]}")
+            continue
+        if not version:
+            reasons.append(f"{package_name} 未安装")
+            continue
+        if expected_suffix not in version.lower():
+            reasons.append(f"{package_name}={version} 不是 {cuda_variant} 版本")
+    return bool(reasons), reasons
+
+
+def ensure_torch_family_compatible(
+    python_executable: Path,
+    runtime_channel: str,
+    *,
+    package_label: str,
+    runner=run_command,
+    install_if_missing: bool = False,
+) -> subprocess.CompletedProcess[str] | None:
+    cuda_variant = _runtime_channel_cuda_variant(runtime_channel)
+    if not cuda_variant:
+        return None
+
+    session_id = _runner_install_session_id(runner)
+    cleanup_invalid_runtime_distributions(runtime_channel, session_id=session_id)
+    probe = _probe_torch_family(python_executable, runtime_channel, runner=runner)
+    needs_repair, reasons = _torch_family_needs_cuda_repair(probe, cuda_variant)
+    if not needs_repair:
+        return None
+    any_torch_distribution = any(
+        str(probe.get(package_name, {}).get("distributionVersion") or probe.get(package_name, {}).get("version") or "")
+        for package_name in _TORCH_FAMILY_PACKAGES
+    )
+    if not any_torch_distribution and not install_if_missing:
+        return None
+
+    if session_id:
+        append_install_log(
+            session_id,
+            "[PyTorch] 检测到 GPU 运行环境的 torch / torchvision / torchaudio 不一致，"
+            f"将从 PyTorch {cuda_variant} 源重新安装三件套。\n"
+            + "\n".join(f"  - {reason}" for reason in reasons),
+        )
+    logger.warning(
+        "repairing torch family runtime_channel=%s package_label=%s reasons=%s",
+        _sanitize_for_log(runtime_channel),
+        _sanitize_for_log(package_label),
+        _sanitize_for_log("; ".join(reasons)),
+    )
+    result = torch_install_with_fallbacks(
+        python_executable,
+        runtime_channel,
+        cuda_variant,
+        timeout=3600,
+        runner=runner,
+        reinstall=True,
+    )
+    cleanup_invalid_runtime_distributions(runtime_channel, session_id=session_id)
+    repaired_probe = _probe_torch_family(python_executable, runtime_channel, runner=runner)
+    still_broken, repair_reasons = _torch_family_needs_cuda_repair(repaired_probe, cuda_variant)
+    if still_broken:
+        detail = "\n".join(f"- {reason}" for reason in repair_reasons)
+        if session_id:
+            append_install_log(session_id, f"[PyTorch] 修复后检测仍未通过：\n{detail}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"{package_label} 安装后 PyTorch GPU 运行环境仍不一致：\n{detail}",
+        )
+    if session_id:
+        append_install_log(session_id, "[PyTorch] GPU 运行环境三件套检测通过。")
+    return result
+
+
 def pip_install_with_fallbacks(
     python_executable: Path,
     runtime_channel: str,
@@ -666,6 +899,8 @@ def pip_install_with_fallbacks(
     runner=run_command,
 ) -> subprocess.CompletedProcess[str]:
     attempts: list[tuple[str, subprocess.CalledProcessError]] = []
+    session_id = _runner_install_session_id(runner)
+    cleanup_invalid_runtime_distributions(runtime_channel, session_id=session_id)
 
     for label, index_url in _PIP_INDEX_CANDIDATES:
         command = [
@@ -685,7 +920,30 @@ def pip_install_with_fallbacks(
         command.extend(packages)
 
         try:
-            return runner(command, runtime_channel=runtime_channel, timeout=timeout)
+            result = runner(command, runtime_channel=runtime_channel, timeout=timeout)
+            cleanup_invalid_runtime_distributions(runtime_channel, session_id=session_id)
+            repair_result = ensure_torch_family_compatible(
+                python_executable,
+                runtime_channel,
+                package_label=package_label,
+                runner=runner,
+            )
+            if repair_result is not None:
+                return subprocess.CompletedProcess(
+                    result.args,
+                    result.returncode,
+                    stdout="\n".join(
+                        part
+                        for part in [str(result.stdout or ""), str(repair_result.stdout or "")]
+                        if part
+                    ),
+                    stderr="\n".join(
+                        part
+                        for part in [str(result.stderr or ""), str(repair_result.stderr or "")]
+                        if part
+                    ),
+                )
+            return result
         except subprocess.CalledProcessError as exc:
             attempts.append((label, exc))
 
@@ -733,8 +991,11 @@ def torch_install_with_fallbacks(
     *,
     timeout: int = 1800,
     runner=run_command,
+    reinstall: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     attempts: list[tuple[str, subprocess.CalledProcessError]] = []
+    session_id = _runner_install_session_id(runner)
+    cleanup_invalid_runtime_distributions(runtime_channel, session_id=session_id)
 
     for label, index_url in _torch_index_candidates(cuda_variant):
         command = [
@@ -744,14 +1005,22 @@ def torch_install_with_fallbacks(
             "install",
             "--disable-pip-version-check",
             "--upgrade",
+            "--upgrade-strategy",
+            "only-if-needed",
+        ]
+        if reinstall:
+            command.append("--force-reinstall")
+        command.extend([
             "torch",
             "torchvision",
             "torchaudio",
             "--index-url",
             index_url,
-        ]
+        ])
         try:
-            return runner(command, runtime_channel=runtime_channel, timeout=timeout)
+            result = runner(command, runtime_channel=runtime_channel, timeout=timeout)
+            cleanup_invalid_runtime_distributions(runtime_channel, session_id=session_id)
+            return result
         except subprocess.CalledProcessError as exc:
             attempts.append((label, exc))
 
@@ -861,14 +1130,24 @@ def _ensure_runtime_sitecustomize(runtime_channel: str) -> None:
     ``os.add_dll_directory(torch/lib)`` which throws
     ``FileNotFoundError: WinError 206`` on portable CPython builds.
     Swallowing this error is safe — the directory is already on PATH.
+
+    Path validation is performed via runtime_site_packages_dir() →
+    managed_runtime_dir() which includes path traversal protection.
     """
+    runtime_channel = normalize_runtime_channel(runtime_channel, allow_unknown_gpu=True)
     if not is_frozen() and uses_current_service_python(runtime_channel):
         # In dev mode with "base" channel, everything runs in the host
         # Python — no managed runtime subprocess, no portable Python issue.
         return
     site_packages = runtime_site_packages_dir(runtime_channel)
     site_packages.mkdir(parents=True, exist_ok=True)
-    target = site_packages / "sitecustomize.py"
+    runtime_root = managed_runtime_root().resolve()
+    resolved_site_packages = site_packages.resolve()
+    try:
+        resolved_site_packages.relative_to(runtime_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid runtime channel path.") from exc
+    target = resolved_site_packages / "sitecustomize.py"
     content = '''"""Auto-generated by BiliSum — do not edit.
 
 Guards os.add_dll_directory against WinError 206 on portable CPython,
@@ -888,8 +1167,12 @@ if _bs_orig is not None:
     if target.exists() and target.read_text(encoding="utf-8") == content:
         return
     target.write_text(content, encoding="utf-8")
-    logger.info("sitecustomize guard written runtime_channel=%s path=%s", runtime_channel, target)
-    logger.info("installed sitecustomize guard runtime_channel=%s", runtime_channel)
+    logger.info(
+        "sitecustomize guard written runtime_channel=%s path=%s",
+        _sanitize_for_log(runtime_channel),
+        _sanitize_for_log(str(target)),
+    )
+    logger.info("installed sitecustomize guard runtime_channel=%s", _sanitize_for_log(runtime_channel))
 
 
 def ensure_runtime_channel(runtime_channel: str) -> Path | None:
@@ -940,7 +1223,22 @@ def runtime_refresh_backup_dir(runtime_channel: str) -> Path:
     return managed_runtime_dir(runtime_channel).parent / f".{runtime_channel}-refresh-backup"
 
 
+def _assert_path_within_managed_runtime_root(path: Path, *, field_name: str = "path") -> Path:
+    """Validate that a path is within the managed runtime root to prevent path traversal."""
+    root = managed_runtime_root().resolve()
+    resolved = path.resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid {field_name}.") from exc
+    return resolved
+
+
 def restore_interrupted_runtime_refresh(runtime_dir: Path, backup_dir: Path) -> None:
+    """Restore runtime from backup if interrupted refresh left it in a bad state.
+
+    Path validation is performed by the caller via managed_runtime_dir().
+    """
     if not backup_dir.exists():
         return
     if runtime_dir.exists():
@@ -949,6 +1247,10 @@ def restore_interrupted_runtime_refresh(runtime_dir: Path, backup_dir: Path) -> 
 
 
 def run_runtime_refresh_with_backup(runtime_dir: Path, backup_dir: Path, refresh) -> None:
+    """Run refresh operation with backup/restore safety net.
+
+    Path validation is performed by the caller via managed_runtime_dir().
+    """
     prepare_runtime_refresh_backup(runtime_dir, backup_dir)
     try:
         refresh()
@@ -962,6 +1264,10 @@ def run_runtime_refresh_with_backup(runtime_dir: Path, backup_dir: Path, refresh
 
 
 def prepare_runtime_refresh_backup(runtime_dir: Path, backup_dir: Path) -> None:
+    """Create backup of runtime before refresh.
+
+    Path validation is performed by the caller via managed_runtime_dir().
+    """
     backup_temp_dir = backup_dir.parent / f".{backup_dir.name}-temp"
     if backup_dir.exists():
         _robust_rmtree(backup_dir)
@@ -982,6 +1288,11 @@ def replace_runtime_with_base_copy(
     runtime_channel: str,
     backup_dir: Path,
 ) -> None:
+    """Replace target runtime with a fresh copy from base.
+
+    Path validation is performed by the caller (ensure_runtime_channel)
+    via managed_runtime_dir() which includes path traversal protection.
+    """
     temp_dir = target_dir.parent / f".{runtime_channel}-refresh-temp"
     if temp_dir.exists():
         _robust_rmtree(temp_dir)
@@ -1411,7 +1722,7 @@ def detect_environment(runtime_channel: str | None = None) -> dict[str, object]:
 
     cached = _load_cached_environment_probe(active_channel)
     if cached is not None:
-        return dict(cached)
+        return apply_knowledge_dependency_policy(dict(cached))
 
     if uses_current_service_python(active_channel):
         # Do NOT .resolve() sys.executable — in uv venvs the symlink
@@ -1427,18 +1738,37 @@ def detect_environment(runtime_channel: str | None = None) -> dict[str, object]:
                 "torchInstalled": False,
                 "torchVersion": "",
                 "torchError": "Runtime Python executable is missing.",
+                "torchvisionInstalled": False,
+                "torchvisionVersion": "",
+                "torchvisionBroken": False,
+                "torchvisionError": "",
+                "torchaudioInstalled": False,
+                "torchaudioVersion": "",
+                "torchaudioBroken": False,
+                "torchaudioError": "",
                 "cudaAvailable": False,
                 "gpuName": "",
                 "ytDlpVersion": "",
                 "localAsrInstalled": False,
                 "localAsrAvailable": False,
                 "localAsrVersion": "",
+                "funasrInstalled": False,
+                "funasrAvailable": False,
+                "funasrVersion": "",
+                "funasrBroken": False,
+                "funasrError": "",
                 "chromadbInstalled": False,
                 "chromadbVersion": "",
+                "chromadbBroken": False,
                 "chromadbError": "",
                 "sentenceTransformersInstalled": False,
                 "sentenceTransformersVersion": "",
+                "sentenceTransformersBroken": False,
                 "sentenceTransformersError": "",
+                "modelscopeInstalled": False,
+                "modelscopeVersion": "",
+                "modelscopeBroken": False,
+                "modelscopeError": "",
                 "knowledgeDependenciesReady": False,
                 "knowledgeDependenciesError": "Runtime Python executable is missing.",
                 "ffmpegLocation": "",
@@ -1489,6 +1819,15 @@ def detect_environment(runtime_channel: str | None = None) -> dict[str, object]:
             "pythonVersion": "",
             "torchInstalled": False,
             "torchVersion": "",
+            "torchError": failure_detail[-1200:],
+            "torchvisionInstalled": False,
+            "torchvisionVersion": "",
+            "torchvisionBroken": False,
+            "torchvisionError": failure_detail[-1200:],
+            "torchaudioInstalled": False,
+            "torchaudioVersion": "",
+            "torchaudioBroken": False,
+            "torchaudioError": failure_detail[-1200:],
             "cudaAvailable": False,
             "gpuName": "",
             "ytDlpVersion": "",
@@ -1498,13 +1837,20 @@ def detect_environment(runtime_channel: str | None = None) -> dict[str, object]:
             "funasrInstalled": False,
             "funasrAvailable": False,
             "funasrVersion": "",
+            "funasrBroken": False,
             "funasrError": failure_detail[-1200:],
             "chromadbInstalled": False,
             "chromadbVersion": "",
+            "chromadbBroken": False,
             "chromadbError": "",
             "sentenceTransformersInstalled": False,
             "sentenceTransformersVersion": "",
+            "sentenceTransformersBroken": False,
             "sentenceTransformersError": "",
+            "modelscopeInstalled": False,
+            "modelscopeVersion": "",
+            "modelscopeBroken": False,
+            "modelscopeError": "",
             "knowledgeDependenciesReady": False,
             "knowledgeDependenciesError": failure_detail[-1200:],
             "ffmpegLocation": "",
@@ -1528,15 +1874,35 @@ def detect_environment(runtime_channel: str | None = None) -> dict[str, object]:
     payload["localAsrInstalled"] = bool(payload.get("localAsrInstalled"))
     payload["localAsrAvailable"] = bool(payload.get("localAsrAvailable"))
     payload["localAsrVersion"] = str(payload.get("localAsrVersion") or "")
+    payload["torchError"] = str(payload.get("torchError") or "")
+    payload["torchvisionInstalled"] = bool(payload.get("torchvisionInstalled"))
+    payload["torchvisionVersion"] = str(payload.get("torchvisionVersion") or "")
+    payload["torchvisionBroken"] = bool(payload.get("torchvisionBroken"))
+    payload["torchvisionError"] = str(payload.get("torchvisionError") or "")
+    payload["torchaudioInstalled"] = bool(payload.get("torchaudioInstalled"))
+    payload["torchaudioVersion"] = str(payload.get("torchaudioVersion") or "")
+    payload["torchaudioBroken"] = bool(payload.get("torchaudioBroken"))
+    payload["torchaudioError"] = str(payload.get("torchaudioError") or "")
+    payload["funasrInstalled"] = bool(payload.get("funasrInstalled"))
+    payload["funasrAvailable"] = bool(payload.get("funasrAvailable"))
+    payload["funasrVersion"] = str(payload.get("funasrVersion") or "")
+    payload["funasrBroken"] = bool(payload.get("funasrBroken"))
     payload["funasrError"] = str(payload.get("funasrError") or "")
     payload["chromadbInstalled"] = bool(payload.get("chromadbInstalled"))
     payload["chromadbVersion"] = str(payload.get("chromadbVersion") or "")
+    payload["chromadbBroken"] = bool(payload.get("chromadbBroken"))
     payload["chromadbError"] = str(payload.get("chromadbError") or "")
     payload["sentenceTransformersInstalled"] = bool(payload.get("sentenceTransformersInstalled"))
     payload["sentenceTransformersVersion"] = str(payload.get("sentenceTransformersVersion") or "")
+    payload["sentenceTransformersBroken"] = bool(payload.get("sentenceTransformersBroken"))
     payload["sentenceTransformersError"] = str(payload.get("sentenceTransformersError") or "")
+    payload["modelscopeInstalled"] = bool(payload.get("modelscopeInstalled"))
+    payload["modelscopeVersion"] = str(payload.get("modelscopeVersion") or "")
+    payload["modelscopeBroken"] = bool(payload.get("modelscopeBroken"))
+    payload["modelscopeError"] = str(payload.get("modelscopeError") or "")
     payload["knowledgeDependenciesReady"] = bool(payload.get("knowledgeDependenciesReady"))
     payload["knowledgeDependenciesError"] = str(payload.get("knowledgeDependenciesError") or "")
+    apply_knowledge_dependency_policy(payload)
     payload["runtimeError"] = str(payload.get("runtimeError") or "")
     _store_cached_environment_probe(active_channel, payload)
     return payload
@@ -1761,6 +2127,10 @@ def serialize_settings(
         "knowledge_embedding_provider": current_settings.knowledge_embedding_provider,
         "knowledge_embedding_model": current_settings.knowledge_embedding_model,
         "hf_endpoint": current_settings.hf_endpoint,
+        "siliconflow_embedding_api_key": "",
+        "siliconflow_embedding_api_key_configured": bool(current_settings.siliconflow_embedding_api_key),
+        "siliconflow_embedding_base_url": current_settings.siliconflow_embedding_base_url,
+        "siliconflow_embedding_model": current_settings.siliconflow_embedding_model,
         "knowledge_index_auto_rebuild": current_settings.knowledge_index_auto_rebuild,
         "summary_system_prompt": current_settings.summary_system_prompt,
         "summary_user_prompt_template": current_settings.summary_user_prompt_template,
@@ -2042,31 +2412,68 @@ def install_funasr(reinstall: bool, repository: SqliteTaskRepository, *, session
         else:
             ensure_python_pip(python_executable, runtime_channel, runner=runner)
 
-        # C1: Probe installed torch before deciding what to install.
-        # On GPU channels the user already has CUDA torch — never install
-        # PyPI CPU torch on top of it.  Only add torch/torchaudio to the
-        # install list when they are genuinely missing.
-        funasr_packages = ["funasr>=1.1.0"]
-        try:
-            result = runner(
-                [str(python_executable), "-c", "import torch; print(torch.__version__)"],
-                runtime_channel=runtime_channel,
-                timeout=30,
+        clear_environment_probe_cache(runtime_channel)
+        pre_install_environment = detect_environment(runtime_channel)
+        repair_reinstall = bool(
+            pre_install_environment.get("funasrVersion")
+            and (
+                pre_install_environment.get("funasrBroken")
+                or pre_install_environment.get("funasrError")
+                or not pre_install_environment.get("funasrInstalled")
             )
-            logger.info("torch %s already installed — skipping torch/torchaudio install", result.stdout.strip())
-        except subprocess.CalledProcessError:
-            logger.info("torch not found — will install torch + torchaudio with funasr")
-            funasr_packages = ["torch", "torchaudio"] + funasr_packages
+        )
+        if repair_reinstall and isinstance(pip_runner, _StreamingRunner):
+            append_install_log(session_id, "[FunASR] 检测到已安装包导入异常，将执行强制重装。")
+
+        torch_repair_result = ensure_torch_family_compatible(
+            python_executable,
+            runtime_channel,
+            package_label="FunASR 依赖",
+            runner=pip_runner,
+            install_if_missing=True,
+        )
+
+        # C1: Probe installed torch before deciding what to install.
+        # On GPU channels, torch / torchvision / torchaudio must come from
+        # the PyTorch CUDA index.  The generic PyPI index can overwrite them
+        # with CPU wheels, so only let PyPI install torch on base/CPU.
+        funasr_packages = ["transformers>=4.0,<4.50", "funasr>=1.1.0"]
+        if not _runtime_channel_cuda_variant(runtime_channel):
+            try:
+                torch_probe = runner(
+                    [str(python_executable), "-c", "import torch; print(torch.__version__)"],
+                    runtime_channel=runtime_channel,
+                    timeout=30,
+                )
+                logger.info("torch %s already installed — skipping torch/torchaudio install", torch_probe.stdout.strip())
+            except subprocess.CalledProcessError:
+                logger.info("torch not found — will install torch + torchaudio with funasr")
+                funasr_packages = ["torch", "torchaudio"] + funasr_packages
 
         result = _run_pip_install(
             python_executable,
             runtime_channel,
             funasr_packages,
             package_label="FunASR 依赖",
-            reinstall=reinstall,
+            reinstall=reinstall or repair_reinstall,
             timeout=3600,
             runner=pip_runner,
         )
+        if torch_repair_result is not None:
+            result = subprocess.CompletedProcess(
+                result.args,
+                result.returncode,
+                stdout="\n".join(
+                    part
+                    for part in [str(torch_repair_result.stdout or ""), str(result.stdout or "")]
+                    if part
+                ),
+                stderr="\n".join(
+                    part
+                    for part in [str(torch_repair_result.stderr or ""), str(result.stderr or "")]
+                    if part
+                ),
+            )
     except subprocess.CalledProcessError as exc:
         if isinstance(pip_runner, _StreamingRunner):
             pip_runner.cancel()
@@ -2117,8 +2524,20 @@ def install_knowledge_dependencies(
     reinstall: bool,
     repository: SqliteTaskRepository,
     runtime_channel: str | None = None,
+    provider: str | None = None,
+    session_id: str | None = None,
 ) -> tuple[dict[str, object], TaskWorker | None]:
     current_settings = settings_manager.current
+
+    # Determine provider
+    if provider is None:
+        provider = str(getattr(current_settings, "knowledge_embedding_provider", "local_huggingface"))
+    provider = provider.strip().lower()
+
+    # Get required packages based on provider
+    requirements = get_knowledge_requirements(provider)
+    required_packages = requirements["required"]
+
     runtime_channel = normalize_runtime_channel(runtime_channel or current_settings.runtime_channel, allow_unknown_gpu=True)
     current_runtime_channel = normalize_runtime_channel(current_settings.runtime_channel, allow_unknown_gpu=True)
     should_refresh_worker = runtime_channel == current_runtime_channel
@@ -2134,11 +2553,30 @@ def install_knowledge_dependencies(
     if runtime_dir is None or python_executable is None:
         raise HTTPException(status_code=500, detail="Managed runtime is unavailable.")
 
+    use_streaming = session_id is not None
+    if use_streaming:
+        start_install_session(session_id, "知识库依赖")
+    if use_streaming and use_current_python:
+        host_env = dict(os.environ)
+        for key in ("PYTHONHOME", "PYTHONPATH", "PYTHONEXECUTABLE", "__PYVENV_LAUNCHER__"):
+            host_env.pop(key, None)
+        host_env["PYTHONIOENCODING"] = "utf-8"
+        host_env["PYTHONUTF8"] = "1"
+        pip_runner: _StreamingRunner | object = _StreamingRunner(session_id, env=host_env, cwd=repo_root())
+    elif use_streaming:
+        pip_runner = _StreamingRunner(session_id)
+    else:
+        pip_runner = runner
+
     repair_reinstall = False
     clear_environment_probe_cache(runtime_channel)
     environment = detect_environment(runtime_channel)
     if not reinstall:
+        environment = apply_knowledge_dependency_policy(environment, provider)
         if environment.get("knowledgeDependenciesReady"):
+            if use_streaming:
+                append_install_log(session_id, "知识库依赖已在当前运行环境可用，无需重复安装。")
+                finish_install_session(session_id, success=True)
             worker = (
                 build_worker(repository, current_settings, environment_info=environment)
                 if should_refresh_worker
@@ -2149,10 +2587,15 @@ def install_knowledge_dependencies(
                 {
                     "runtimeChannel": runtime_channel,
                     "python": str(python_executable),
-                    "chromadbInstalled": True,
+                    "chromadbInstalled": bool(environment.get("chromadbInstalled")),
                     "chromadbVersion": str(environment.get("chromadbVersion") or ""),
-                    "sentenceTransformersInstalled": True,
+                    "chromadbBroken": bool(environment.get("chromadbBroken")),
+                    "sentenceTransformersInstalled": bool(environment.get("sentenceTransformersInstalled")),
                     "sentenceTransformersVersion": str(environment.get("sentenceTransformersVersion") or ""),
+                    "sentenceTransformersBroken": bool(environment.get("sentenceTransformersBroken")),
+                    "modelscopeInstalled": bool(environment.get("modelscopeInstalled")),
+                    "modelscopeVersion": str(environment.get("modelscopeVersion") or ""),
+                    "modelscopeBroken": bool(environment.get("modelscopeBroken")),
                     "knowledgeDependenciesReady": True,
                 },
             )
@@ -2161,19 +2604,26 @@ def install_knowledge_dependencies(
                 "runtimeChannel": runtime_channel,
                 "stdoutTail": "知识库依赖已在当前运行环境可用，无需重复安装。",
                 "environment": environment,
+                "installSessionId": session_id,
             }, worker
         repair_reinstall = bool(
             environment.get("chromadbVersion")
             or environment.get("sentenceTransformersVersion")
+            or environment.get("modelscopeVersion")
             or environment.get("chromadbError")
             or environment.get("sentenceTransformersError")
-            or environment.get("knowledgeDependenciesError")
+            or environment.get("modelscopeError")
+            or (
+                environment.get("knowledgeDependenciesError")
+                and not str(environment.get("knowledgeDependenciesError") or "").startswith("缺少依赖")
+            )
         )
 
-    packages = [
-        "chromadb>=1.0.0",
-        "sentence-transformers>=3.0",
-    ]
+    packages = ["chromadb>=1.0.0"]
+    if "sentence-transformers" in required_packages:
+        packages.extend(["transformers>=4.0,<4.50", "sentence-transformers>=3.0"])
+    if "modelscope" in required_packages:
+        packages.append("modelscope")
 
     try:
         if not use_current_python:
@@ -2188,19 +2638,25 @@ def install_knowledge_dependencies(
             package_label="知识库依赖",
             reinstall=reinstall or repair_reinstall,
             timeout=1800,
-            runner=runner,
+            runner=pip_runner,
         )
     except subprocess.CalledProcessError as exc:
+        if isinstance(pip_runner, _StreamingRunner):
+            pip_runner.cancel()
+            finish_install_session(session_id, success=False)
         clear_environment_probe_cache(runtime_channel)
         raise HTTPException(status_code=500, detail=((exc.stderr or exc.stdout or str(exc))[-1500:])) from exc
     except HTTPException:
+        if isinstance(pip_runner, _StreamingRunner):
+            pip_runner.cancel()
+            finish_install_session(session_id, success=False)
         clear_environment_probe_cache(runtime_channel)
         raise
 
     importlib.invalidate_caches()
     activate_runtime_pythonpath(runtime_channel)
     clear_environment_probe_cache(runtime_channel)
-    environment = detect_environment(runtime_channel)
+    environment = apply_knowledge_dependency_policy(detect_environment(runtime_channel), provider)
     worker = (
         build_worker(repository, current_settings, environment_info=environment)
         if should_refresh_worker
@@ -2213,14 +2669,23 @@ def install_knowledge_dependencies(
             "python": str(python_executable),
             "chromadbInstalled": bool(environment.get("chromadbInstalled")),
             "chromadbVersion": str(environment.get("chromadbVersion") or ""),
+            "chromadbBroken": bool(environment.get("chromadbBroken")),
             "sentenceTransformersInstalled": bool(environment.get("sentenceTransformersInstalled")),
             "sentenceTransformersVersion": str(environment.get("sentenceTransformersVersion") or ""),
+            "sentenceTransformersBroken": bool(environment.get("sentenceTransformersBroken")),
+            "modelscopeInstalled": bool(environment.get("modelscopeInstalled")),
+            "modelscopeVersion": str(environment.get("modelscopeVersion") or ""),
+            "modelscopeBroken": bool(environment.get("modelscopeBroken")),
             "knowledgeDependenciesReady": bool(environment.get("knowledgeDependenciesReady")),
         },
     )
+    installed = bool(environment.get("knowledgeDependenciesReady"))
+    if use_streaming:
+        finish_install_session(session_id, success=installed)
     return {
-        "installed": bool(environment.get("knowledgeDependenciesReady")),
+        "installed": installed,
         "runtimeChannel": runtime_channel,
+        "installSessionId": session_id,
         "stdoutTail": ((result.stdout or "") + "\n" + (result.stderr or "")).strip()[-1500:],
         "repairReinstall": repair_reinstall,
         "environment": environment,
@@ -2390,9 +2855,68 @@ def verify_embedding_model(
     provider: str = "local_huggingface",
     model_name: str = "BAAI/bge-small-zh-v1.5",
     hf_endpoint: str = "",
+    api_key: str = "",
+    base_url: str = "",
 ) -> dict[str, object]:
     current_settings = settings_manager.current
     runtime_channel = normalize_runtime_channel(current_settings.runtime_channel, allow_unknown_gpu=True)
+
+    provider = str(provider or "local_huggingface").strip().lower()
+    if provider == "siliconflow":
+        from video_sum_service.knowledge.index_service import KnowledgeIndexService
+
+        effective_api_key = str(api_key or "").strip()
+        if is_blank_or_masked_secret(effective_api_key):
+            effective_api_key = str(current_settings.siliconflow_embedding_api_key or "").strip()
+        if not effective_api_key:
+            return {
+                "verified": False,
+                "dimension": 0,
+                "detail": "硅基流动 Embedding API Key 未配置。",
+                "stdoutTail": "",
+            }
+        effective_base_url = str(base_url or current_settings.siliconflow_embedding_base_url or "").strip()
+        effective_model = str(model_name or current_settings.siliconflow_embedding_model or "").strip()
+        if not effective_base_url or not effective_model:
+            return {
+                "verified": False,
+                "dimension": 0,
+                "detail": "硅基流动 Embedding Base URL 或模型名称未配置。",
+                "stdoutTail": "",
+            }
+        probe_settings = current_settings.model_copy(
+            update={
+                "knowledge_embedding_provider": "siliconflow",
+                "siliconflow_embedding_api_key": effective_api_key,
+                "siliconflow_embedding_base_url": effective_base_url,
+                "siliconflow_embedding_model": effective_model,
+                "knowledge_embedding_model": effective_model,
+            }
+        )
+        try:
+            service = KnowledgeIndexService(repository or SimpleNamespace(), probe_settings, model_name=effective_model)
+            vectors = service._embed_texts_siliconflow(["BiliSum embedding connectivity test"])
+            dimension = len(vectors[0]) if vectors else 0
+            if dimension <= 0:
+                return {
+                    "verified": False,
+                    "dimension": 0,
+                    "detail": "硅基流动 Embedding API 返回向量为空。",
+                    "stdoutTail": "",
+                }
+            return {
+                "verified": True,
+                "dimension": dimension,
+                "detail": f"硅基流动向量模型可用，向量维度 {dimension}",
+                "stdoutTail": f"[OK] SiliconFlow embeddings model={effective_model} dim={dimension}",
+            }
+        except HTTPException as exc:
+            return {
+                "verified": False,
+                "dimension": 0,
+                "detail": str(exc.detail),
+                "stdoutTail": str(exc.detail),
+            }
 
     if provider == "online":
         raise HTTPException(status_code=501, detail="在线 Embedding API 暂不支持。")
@@ -2433,3 +2957,75 @@ def verify_embedding_model(
 def get_embedding_model_presets() -> dict[str, str]:
     """Return the available embedding model presets."""
     return dict(_EMBEDDING_MODEL_PRESETS)
+
+
+# -- Smart knowledge dependency management -----------------------------------
+
+def get_knowledge_requirements(provider: str) -> dict[str, object]:
+    """Get required packages based on embedding provider."""
+    provider = str(provider or "").strip().lower()
+
+    if provider == "siliconflow":
+        return {"required": ["chromadb"], "optional": [], "preinstalled": []}
+    elif provider == "local_modelscope":
+        return {"required": ["chromadb", "sentence-transformers", "modelscope"], "optional": [], "preinstalled": []}
+    else:
+        return {"required": ["chromadb", "sentence-transformers"], "optional": [], "preinstalled": []}
+
+
+def check_package_dependencies(package: str) -> list[str]:
+    """Check what features depend on this package."""
+    dependencies = []
+    settings = settings_manager.current
+    
+    if package == "sentence-transformers":
+        provider = str(getattr(settings, "knowledge_embedding_provider", "")).lower()
+        if provider in ("local_huggingface", "local_modelscope"):
+            dependencies.append("知识库（本地向量模型）")
+    
+    if package == "modelscope":
+        provider = str(getattr(settings, "knowledge_embedding_provider", "")).lower()
+        if provider == "local_modelscope":
+            dependencies.append("知识库（ModelScope 向量模型）")
+        funasr_hub = str(getattr(settings, "funasr_hub", "")).lower()
+        if funasr_hub == "ms":
+            dependencies.append("FunASR（ModelScope Hub）")
+    
+    if package == "chromadb":
+        if getattr(settings, "knowledge_enabled", False):
+            dependencies.append("知识库（向量数据库）")
+    
+    return dependencies
+
+
+def uninstall_packages(packages: list[str], runtime_channel: str | None = None) -> dict[str, object]:
+    """Uninstall specified packages from runtime."""
+    runtime_channel = normalize_runtime_channel(runtime_channel or settings_manager.current.runtime_channel, allow_unknown_gpu=True)
+    
+    use_current_python = uses_current_service_python(runtime_channel)
+    if use_current_python:
+        python_executable = Path(sys.executable)
+        runner = lambda command, runtime_channel, timeout=1800: run_host_command(command, timeout=timeout)
+    else:
+        ensure_runtime_channel(runtime_channel)
+        python_executable = runtime_python_executable(runtime_channel)
+        runner = run_command
+    
+    if python_executable is None:
+        raise HTTPException(status_code=500, detail="Runtime unavailable.")
+    
+    try:
+        removed_before = cleanup_invalid_runtime_distributions(runtime_channel)
+        result = runner([str(python_executable), "-m", "pip", "uninstall", "-y", *packages], runtime_channel, timeout=600)
+        removed_after = cleanup_invalid_runtime_distributions(runtime_channel)
+        clear_environment_probe_cache(runtime_channel)
+        cleanup_lines = []
+        if removed_before:
+            cleanup_lines.append(f"卸载前已清理 pip 残留：{', '.join(removed_before)}")
+        if removed_after:
+            cleanup_lines.append(f"卸载后已清理 pip 残留：{', '.join(removed_after)}")
+        stdout = "\n".join(part for part in [*cleanup_lines, result.stdout or ""] if part)
+        return {"success": True, "packages": packages, "stdout": stdout, "stderr": result.stderr or ""}
+    except subprocess.CalledProcessError as exc:
+        cleanup_invalid_runtime_distributions(runtime_channel)
+        raise HTTPException(status_code=500, detail=f"卸载失败：{(exc.stderr or exc.stdout or str(exc))[-1000:]}") from exc

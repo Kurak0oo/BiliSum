@@ -44,11 +44,13 @@ from video_sum_service.runtime_startup import get_runtime_startup_state, mark_ru
 from video_sum_service.runtime_support import (
     _load_cached_environment_probe,
     build_worker,
+    check_package_dependencies,
     clear_environment_probe_cache,
     detect_environment,
     download_embedding_model,
     ensure_runtime_channel,
     get_embedding_model_presets,
+    get_knowledge_requirements,
     inspect_runtime_channels,
     install_cuda_support,
     install_funasr,
@@ -60,6 +62,7 @@ from video_sum_service.runtime_support import (
     serialize_settings,
     sync_all_runtime_channels,
     sync_runtime_channel,
+    uninstall_packages,
     verify_embedding_model,
 )
 from video_sum_service.schemas import (
@@ -575,10 +578,14 @@ def post_knowledge_install(request: Request, payload: dict[str, object] | None =
     reinstall = bool(payload.get("reinstall"))
     runtime_channel_raw = str(payload.get("runtime_channel") or payload.get("runtimeChannel") or "").strip()
     runtime_channel = normalize_runtime_channel(runtime_channel_raw, allow_unknown_gpu=True) if runtime_channel_raw else None
+    provider = str(payload.get("provider") or "").strip() or None
+    session_id = str(payload.get("installSessionId") or "") or None
     result, worker = install_knowledge_dependencies(
         reinstall=reinstall,
         repository=request.app.state.task_repository,
         runtime_channel=runtime_channel,
+        provider=provider,
+        session_id=session_id,
     )
     if worker is not None:
         _clear_knowledge_service_cache(request.app.state)
@@ -608,18 +615,50 @@ def post_embedding_download(payload: dict[str, object]) -> dict[str, object]:
 
 
 @router.post("/knowledge/embedding/test")
-def post_embedding_test(payload: dict[str, object]) -> dict[str, object]:
+def post_embedding_test(payload: dict[str, object], request: Request) -> dict[str, object]:
     provider = str(payload.get("provider") or "local_huggingface")
     model_name = str(payload.get("model") or "BAAI/bge-small-zh-v1.5")
     hf_endpoint = str(payload.get("hf_endpoint") or "")
+    api_key = str(payload.get("api_key") or "")
+    base_url = str(payload.get("base_url") or "")
     return verify_embedding_model(
-        None,  # type: ignore
+        request.app.state.task_repository,
         provider=provider,
         model_name=model_name,
         hf_endpoint=hf_endpoint,
+        api_key=api_key,
+        base_url=base_url,
     )
 
 
 @router.get("/knowledge/embedding/presets")
 def get_embedding_presets() -> dict[str, object]:
     return {"presets": get_embedding_model_presets()}
+
+
+@router.get("/runtime/knowledge-requirements")
+def get_runtime_knowledge_requirements(provider: str = "local_huggingface") -> dict[str, object]:
+    """Get required packages based on embedding provider."""
+    return get_knowledge_requirements(provider)
+
+
+@router.get("/runtime/package-dependencies")
+def get_runtime_package_dependencies(package: str) -> dict[str, object]:
+    """Check what features depend on this package."""
+    return {"package": package, "dependencies": check_package_dependencies(package)}
+
+
+@router.post("/runtime/uninstall-packages")
+def post_runtime_uninstall_packages(payload: dict[str, object]) -> dict[str, object]:
+    """Uninstall specified packages from runtime."""
+    packages = payload.get("packages", [])
+    if not isinstance(packages, list) or not packages:
+        raise HTTPException(status_code=400, detail="packages 参数必须是非空列表")
+
+    runtime_channel_raw = str(payload.get("runtime_channel") or payload.get("runtimeChannel") or "").strip()
+    runtime_channel = (
+        normalize_runtime_channel(runtime_channel_raw, allow_unknown_gpu=True)
+        if runtime_channel_raw
+        else None
+    )
+    return uninstall_packages(packages, runtime_channel)

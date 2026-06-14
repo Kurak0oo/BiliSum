@@ -495,7 +495,13 @@ export const api = {
       log: string;
     }>(`/api/v1/asr/install-log?session_id=${encodeURIComponent(sessionId)}`);
   },
-  installKnowledgeDependencies(payload?: { reinstall?: boolean; runtime_channel?: string; runtimeChannel?: string }) {
+  installKnowledgeDependencies(payload?: {
+    reinstall?: boolean;
+    runtime_channel?: string;
+    runtimeChannel?: string;
+    provider?: string;
+    installSessionId?: string;
+  }) {
     return fetchJson<{
       installed: boolean;
       runtimeChannel?: string;
@@ -520,7 +526,7 @@ export const api = {
       body: JSON.stringify(payload ?? {}),
     });
   },
-  testEmbeddingModel(payload: { provider?: string; model?: string; hf_endpoint?: string }) {
+  testEmbeddingModel(payload: { provider?: string; model?: string; hf_endpoint?: string; api_key?: string; base_url?: string }) {
     return fetchJson<{
       verified: boolean;
       dimension?: number;
@@ -534,6 +540,19 @@ export const api = {
   },
   getEmbeddingPresets() {
     return fetchJson<{ presets: Record<string, string> }>("/api/v1/knowledge/embedding/presets");
+  },
+  getKnowledgeRequirements(provider: string) {
+    return fetchJson<{ required: string[]; optional: string[]; preinstalled: string[] }>(`/api/v1/runtime/knowledge-requirements?provider=${encodeURIComponent(provider)}`);
+  },
+  getPackageDependencies(packageName: string) {
+    return fetchJson<{ package: string; dependencies: string[] }>(`/api/v1/runtime/package-dependencies?package=${encodeURIComponent(packageName)}`);
+  },
+  uninstallPackages(payload: { packages: string[]; runtime_channel?: string; runtimeChannel?: string }) {
+    return fetchJson<{ success: boolean; packages: string[]; stdout: string; stderr: string }>("/api/v1/runtime/uninstall-packages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
   },
   createTaskEventSource(taskId: string, after?: string | null) {
     const url = new URL(`/api/v1/tasks/${taskId}/events/stream`, window.location.origin);
