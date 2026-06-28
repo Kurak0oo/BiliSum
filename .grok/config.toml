@@ -1,0 +1,9 @@
+# Project config for BiliSum (safe to commit)
+[skills]
+paths = ["~/dev/grok-workspace-bootstrap/shared/skills"]  # or your ws-sync path
+
+# Add project-specific MCP servers or tool permissions here when needed.
+# Example (uncomment if you add a local model MCP):
+# [[mcp_servers]]
+# name = "local-llm"
+# command = "..."
