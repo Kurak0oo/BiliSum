@@ -131,13 +131,24 @@ def extract_llm_message_content(body: object) -> str:
     if isinstance(choice_text, str) and choice_text.strip():
         return choice_text.strip()
 
-    message = first.get("message")
-    if not isinstance(message, dict):
-        return ""
+    message = first.get("message") or {}
+    delta = first.get("delta") or {}
 
-    content = extract_text_from_content_blocks(message.get("content"))
+    # Standard content (non-stream or final message)
+    content = extract_text_from_content_blocks(message.get("content") or delta.get("content"))
     if content:
         return content
+
+    # GLM / reasoning models (ZhipuAI/GLM-5.2 etc.) often put the final answer
+    # or thinking trace in reasoning_content when content is empty or separate.
+    reasoning = (
+        message.get("reasoning_content")
+        or delta.get("reasoning_content")
+        or message.get("thinking")
+        or first.get("reasoning_content")
+    )
+    if isinstance(reasoning, str) and reasoning.strip():
+        return reasoning.strip()
 
     return ""
 

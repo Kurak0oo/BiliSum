@@ -157,16 +157,47 @@ VIDEO_SUM_SILICONFLOW_ASR_API_KEY=your-key
 
 # LLM 摘要
 VIDEO_SUM_LLM_ENABLED=true
+# SiliconFlow paid (OpenAI compatible)
+# Docs: https://api-docs.siliconflow.cn/docs/userguide/introduction
+# Key: https://cloud.siliconflow.cn/account/ak
+# Base: https://api.siliconflow.cn/v1
+# Test models (code enables thinking for max/high effect):
+#   deepseek-ai/DeepSeek-V4-Pro   # (max)
+#   Qwen/Qwen3.7-Plus             # (high)
 VIDEO_SUM_LLM_PROVIDER=openai-compatible
-VIDEO_SUM_LLM_BASE_URL=https://coding.dashscope.aliyuncs.com/v1
-VIDEO_SUM_LLM_MODEL=qwen3.5-plus
-VIDEO_SUM_LLM_API_KEY=your-key
+VIDEO_SUM_LLM_BASE_URL=https://api.siliconflow.cn/v1
+VIDEO_SUM_LLM_MODEL=deepseek-ai/DeepSeek-V4-Pro
+VIDEO_SUM_LLM_API_KEY=sk-your-siliconflow-key
+
+# 备选（付费示例）
+# VIDEO_SUM_LLM_BASE_URL=https://coding.dashscope.aliyuncs.com/v1
+# VIDEO_SUM_LLM_MODEL=qwen3.5-plus
+# VIDEO_SUM_LLM_API_KEY=your-key
 
 # B 站 Cookies（遇到风控时配置）
 VIDEO_SUM_YTDLP_COOKIES_FILE=
 ```
 
 桌面端遇到 B 站风控优先用内置扫码登录。
+
+## SiliconFlow paid LLM (switch from ModelScope due to rate limits)
+Use paid for better/faster results with DeepSeek V4 Pro (max) and Qwen3.7-Plus (high).
+- Get key: https://cloud.siliconflow.cn/account/ak
+- In desktop Settings → 生成摘要:
+  - Click "SiliconFlow DeepSeek V4 Pro (max)" or "SiliconFlow Qwen3.7-Plus (high)"
+  - Paste sk- key, Test, enable, save.
+- Env:
+  ```
+  VIDEO_SUM_LLM_PROVIDER=openai-compatible
+  VIDEO_SUM_LLM_BASE_URL=https://api.siliconflow.cn/v1
+  VIDEO_SUM_LLM_MODEL=deepseek-ai/DeepSeek-V4-Pro
+  VIDEO_SUM_LLM_API_KEY=sk-xxx
+  ```
+- The build code auto-enables thinking + max/high reasoning_effort for these model names to test full effect.
+- See .env.example .
+  - 建议在 ModelScope 账号后台查看剩余额度。临时免费窗口有时针对 GLM-5.2 开放。
+
+更多：.env.example 和 Settings 页面。
 
 ### 启动开发环境
 

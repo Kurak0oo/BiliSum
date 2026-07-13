@@ -1,0 +1,3 @@
+{"stage": "transcribing", "progress": 54, "message": "正在加载 FunASR 模型 paraformer-zh（首次运行需下载，请耐心等待）"}
+{"stage": "transcribing", "progress": 62, "message": "模型加载完成，正在转写音频 BiliSum Local Demo (Chinese ASR test clip).mp3"}
+{"stage": "transcribing", "progress": 84, "message": "转写完成，共识别 2 段", "payload": {"segment_count": 2}}

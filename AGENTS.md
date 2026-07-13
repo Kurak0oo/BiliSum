@@ -6,7 +6,7 @@ BiliSum turns Bilibili (and other) videos into searchable notes, mindmaps, and a
 - Root: apps/desktop (Electron+React), apps/service (FastAPI), packages/core + infra.
 - Pipeline: yt-dlp download/probe → bilibili subtitle or ASR (FunASR recommended for zh) → transcript segments → LLM chunked summary (knowledge cards) → knowledge_note.md (full readable) → mindmap.json + visual notes (optional).
 - Exports are self-contained Markdown + assets.
-- Local only by design. Supports SiliconFlow, local Whisper/FunASR, OpenAI-compatible LLMs + vision models.
+- Local only by design. Supports SiliconFlow, local Whisper/FunASR, OpenAI-compatible LLMs (incl. ModelScope free API-Inference) + vision models.
 
 ## Rules for Grok Sessions
 - Always follow this file + any .grok/ contents when inside the tree.
@@ -30,5 +30,13 @@ BiliSum turns Bilibili (and other) videos into searchable notes, mindmaps, and a
 - Or the desktop dev: npm run dev (from apps/desktop)
 - Test clip is in demo-assets/
 - Export artifacts end up in the task dir under data.
+
+## LLM 配置 (跨机器注意)
+LLM 通过 openai-compatible 接口 (支持 ModelScope https://api-inference.modelscope.cn/v1/ )。
+- 桌面 UI 设置（推荐）：Settings → 生成摘要 → 使用 ModelScope 预设，填 token（ms-...），测试连接，启用。
+- Token 每台机器单独设置，**不要提交到 git**。
+- 跨机器同步：模型名/base 写在 README / .env.example，实际 key 手动设。
+- 强模型推荐（中文视频摘要）：Qwen 系列或 GLM（在 ModelScope 选最新可用）。超限自动回退规则摘要。
+- 知识库/视觉可独立配置或跟随主 LLM。
 
 Update this file when architecture or conventions change — it will be present on all your machines.

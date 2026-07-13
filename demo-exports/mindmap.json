@@ -1,0 +1,137 @@
+{
+  "version": 1,
+  "title": "Bilism语音识别系统演示",
+  "root": "root",
+  "nodes": [
+    {
+      "id": "root",
+      "label": "主题 9",
+      "type": "root",
+      "summary": "",
+      "children": [
+        {
+          "id": "theme-1",
+          "label": "测试启动与基本响应",
+          "type": "theme",
+          "summary": "通过简单问候语展示了系统的启动及初步响应。",
+          "children": [
+            {
+              "id": "leaf-1",
+              "label": "问候语展示系统启动",
+              "type": "leaf",
+              "summary": "视频开始（0:13左右）通过\"你好\"这一问候语，展示了bilism语音识别系统的启动及初步响应。",
+              "children": [],
+              "time_anchor": 0.13,
+              "source_chapter_titles": [
+                "测试介绍"
+              ],
+              "source_chapter_starts": [
+                0.13
+              ]
+            }
+          ],
+          "time_anchor": null,
+          "source_chapter_titles": [
+            "测试介绍"
+          ],
+          "source_chapter_starts": [
+            0.13
+          ]
+        },
+        {
+          "id": "theme-2",
+          "label": "系统识别与处理验证",
+          "type": "theme",
+          "summary": "展示并确认系统能够准确地接收到并理解指示性文字内容。",
+          "children": [
+            {
+              "id": "leaf-2",
+              "label": "连接测试文本识别",
+              "type": "leaf",
+              "summary": "1:11左右，正确读取并理解\"这是 bilism 语音识别连接测试\"这一指示性文字内容。",
+              "children": [],
+              "time_anchor": 1.11,
+              "source_chapter_titles": [
+                "系统验证与处理"
+              ],
+              "source_chapter_starts": [
+                1.11
+              ]
+            },
+            {
+              "id": "leaf-3",
+              "label": "文本连贯性和准确性",
+              "type": "leaf",
+              "summary": "通过正确识别\"这是 bilism 语音识别连接测试\"这一明确指示内容，展示了系统的连贯性和准确性。",
+              "children": [],
+              "time_anchor": 1.11,
+              "source_chapter_titles": [
+                "系统验证与处理"
+              ],
+              "source_chapter_starts": [
+                1.11
+              ]
+            }
+          ],
+          "time_anchor": null,
+          "source_chapter_titles": [
+            "系统验证与处理"
+          ],
+          "source_chapter_starts": [
+            1.11
+          ]
+        },
+        {
+          "id": "theme-3",
+          "label": "系统有效性确认",
+          "type": "theme",
+          "summary": "通过系统的准确运作，最终证实其高效性和可靠性。",
+          "children": [
+            {
+              "id": "leaf-4",
+              "label": "多段指示内容处理",
+              "type": "leaf",
+              "summary": "1:30左右，系统准确识别并理解多段文字内容，展示了系统的高精度。",
+              "children": [],
+              "time_anchor": 1.5,
+              "source_chapter_titles": [
+                "成功验证系统有效性和可靠性"
+              ],
+              "source_chapter_starts": [
+                1.3
+              ]
+            },
+            {
+              "id": "leaf-5",
+              "label": "整体可靠性和实用性确认",
+              "type": "leaf",
+              "summary": "系统的高效运作证明了其在实际应用中的实用性和有效性。",
+              "children": [],
+              "time_anchor": 1.3,
+              "source_chapter_titles": [
+                "成功验证系统有效性和可靠性"
+              ],
+              "source_chapter_starts": [
+                1.3
+              ]
+            }
+          ],
+          "time_anchor": null,
+          "source_chapter_titles": [
+            "成功验证系统有效性和可靠性"
+          ],
+          "source_chapter_starts": [
+            1.3
+          ]
+        }
+      ],
+      "time_anchor": null,
+      "source_chapter_titles": [
+        "测试介绍"
+      ],
+      "source_chapter_starts": [
+        0.13
+      ]
+    }
+  ]
+}

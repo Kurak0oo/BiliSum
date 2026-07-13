@@ -1413,6 +1413,29 @@ export function SettingsPage({
     });
   }
 
+  // SiliconFlow paid (OpenAI compatible)
+  // https://api-docs.siliconflow.cn/docs/userguide/introduction
+  // Key from https://cloud.siliconflow.cn/account/ak
+  function applySiliconFlowDeepSeekV4ProMax() {
+    if (!form) return;
+    updateForm({
+      ...form,
+      llm_provider: "openai-compatible",
+      llm_base_url: "https://api.siliconflow.cn/v1",
+      llm_model: "deepseek-ai/DeepSeek-V4-Pro",
+    });
+  }
+
+  function applySiliconFlowQwen37PlusHigh() {
+    if (!form) return;
+    updateForm({
+      ...form,
+      llm_provider: "openai-compatible",
+      llm_base_url: "https://api.siliconflow.cn/v1",
+      llm_model: "Qwen/Qwen3.7-Plus",
+    });
+  }
+
   function validateSettingsBeforeSave(nextForm: ServiceSettings): { message: string; category: SettingsCategory; targetKey: string } | null {
     if (!String(nextForm.host || "").trim()) {
       return {
@@ -4768,6 +4791,28 @@ export function SettingsPage({
                     <span className="settings-input-label">模型名称</span>
                     <input className="settings-input-field" value={form.llm_model} onChange={(e) => updateForm({ ...form, llm_model: e.target.value })} placeholder="gpt-4o-mini / claude-3-haiku" />
                   </label>
+                  <div style={{ margin: "4px 0 8px" }}>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => applySiliconFlowDeepSeekV4ProMax()}
+                      title="SiliconFlow DeepSeek-V4-Pro (max reasoning) - paid"
+                    >
+                      SiliconFlow DeepSeek V4 Pro (max)
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => applySiliconFlowQwen37PlusHigh()}
+                      title="SiliconFlow Qwen3.7-Plus (high) - paid"
+                      style={{ marginLeft: 8 }}
+                    >
+                      SiliconFlow Qwen3.7-Plus (high)
+                    </button>
+                    <span className="settings-input-caption" style={{ marginLeft: 8 }}>
+                      （填入 SiliconFlow API Key 后测试）
+                    </span>
+                  </div>
                   <div className={`settings-inline-alert ${llmReady ? "success" : "warning"}`}>
                     <strong>{llmReady ? "主摘要模型配置完整" : "主摘要模型仍需补全"}</strong>
                     <span>{llmReady ? "可以保存后用于摘要、导图和默认视觉模型。": "启用 LLM 摘要时，需要 Base URL、API Key 与模型名称都有效。"}</span>
